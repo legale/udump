@@ -125,10 +125,10 @@ int main(int argc, char **argv)
   }
 
   cfg.ifname = opts.ifname;
+  cfg.out_path = opts.out_path;
   cfg.pkt_limit = opts.pkt_limit;
   cfg.time_limit = opts.time_limit;
 
-  (void)opts.out_path;
   (void)opts.filter_argc;
   (void)opts.filter_argv;
   return capture_run(&cfg) < 0;

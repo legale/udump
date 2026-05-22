@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "capture.h"
+#include "pcap.h"
 
 static int now_ms(unsigned long long *out)
 {
@@ -99,19 +100,27 @@ static int wait_packet(int fd, unsigned long long deadline_ms)
 int capture_run(const struct capture_cfg *cfg)
 {
   unsigned char buf[65536];
+  struct pcap_writer pw;
+  struct timespec ts;
   unsigned long long deadline_ms;
   unsigned long long seen;
   int ready;
   int fd;
 
-  fd = open_socket(cfg->ifname);
-  if (fd < 0)
+  if (pcap_open(&pw, cfg->out_path) < 0)
     return -1;
+
+  fd = open_socket(cfg->ifname);
+  if (fd < 0) {
+    pcap_close(&pw);
+    return -1;
+  }
 
   deadline_ms = 0;
   if (cfg->time_limit) {
     if (now_ms(&deadline_ms) < 0) {
       close(fd);
+      pcap_close(&pw);
       return -1;
     }
     deadline_ms += (unsigned long long)cfg->time_limit * 1000ull;
@@ -122,17 +131,34 @@ int capture_run(const struct capture_cfg *cfg)
     ready = wait_packet(fd, deadline_ms);
     if (ready < 0) {
       close(fd);
+      pcap_close(&pw);
       return -1;
     }
 
     if (!ready)
       break;
 
-    if (recvfrom(fd, buf, sizeof(buf), 0, NULL, NULL) < 0) {
+    ready = recvfrom(fd, buf, sizeof(buf), 0, NULL, NULL);
+    if (ready < 0) {
       if (errno == EINTR)
         continue;
       perror("recvfrom");
       close(fd);
+      pcap_close(&pw);
+      return -1;
+    }
+
+    if (clock_gettime(CLOCK_REALTIME, &ts) < 0) {
+      perror("clock_gettime");
+      close(fd);
+      pcap_close(&pw);
+      return -1;
+    }
+
+    if (pcap_write_packet(&pw, &ts, buf, (unsigned int)ready,
+        (unsigned int)ready) < 0) {
+      close(fd);
+      pcap_close(&pw);
       return -1;
     }
 
@@ -143,8 +169,12 @@ int capture_run(const struct capture_cfg *cfg)
 
   if (close(fd) < 0) {
     perror("close");
+    pcap_close(&pw);
     return -1;
   }
+
+  if (pcap_close(&pw) < 0)
+    return -1;
 
   return 0;
 }

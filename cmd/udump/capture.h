@@ -3,6 +3,7 @@
 
 struct capture_cfg {
   const char *ifname;
+  const char *out_path;
   unsigned long long pkt_limit;
   unsigned int time_limit;
 };
