@@ -11,6 +11,8 @@
 #include <unistd.h>
 
 #include "capture.h"
+#include "filter.h"
+#include "packet.h"
 #include "pcap.h"
 
 static int now_ms(unsigned long long *out)
@@ -100,10 +102,12 @@ static int wait_packet(int fd, unsigned long long deadline_ms)
 int capture_run(const struct capture_cfg *cfg)
 {
   unsigned char buf[65536];
+  struct pkt_info pi;
   struct pcap_writer pw;
   struct timespec ts;
   unsigned long long deadline_ms;
   unsigned long long seen;
+  ssize_t len;
   int ready;
   int fd;
 
@@ -138,14 +142,21 @@ int capture_run(const struct capture_cfg *cfg)
     if (!ready)
       break;
 
-    ready = recvfrom(fd, buf, sizeof(buf), 0, NULL, NULL);
-    if (ready < 0) {
+    len = recvfrom(fd, buf, sizeof(buf), 0, NULL, NULL);
+    if (len < 0) {
       if (errno == EINTR)
         continue;
       perror("recvfrom");
       close(fd);
       pcap_close(&pw);
       return -1;
+    }
+
+    if (cfg->filter && cfg->filter->nterms) {
+      if (packet_parse(&pi, buf, (unsigned int)len) < 0)
+        continue;
+      if (!filter_match(cfg->filter, &pi))
+        continue;
     }
 
     if (clock_gettime(CLOCK_REALTIME, &ts) < 0) {
@@ -155,8 +166,8 @@ int capture_run(const struct capture_cfg *cfg)
       return -1;
     }
 
-    if (pcap_write_packet(&pw, &ts, buf, (unsigned int)ready,
-        (unsigned int)ready) < 0) {
+    if (pcap_write_packet(&pw, &ts, buf, (unsigned int)len,
+        (unsigned int)len) < 0) {
       close(fd);
       pcap_close(&pw);
       return -1;

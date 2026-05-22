@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "capture.h"
+#include "filter.h"
 
 struct opts {
   const char *ifname;
@@ -117,19 +118,25 @@ static int parse_opts(struct opts *opts, int argc, char **argv)
 int main(int argc, char **argv)
 {
   struct capture_cfg cfg;
+  struct filter flt;
   struct opts opts;
+  int rc;
 
   if (parse_opts(&opts, argc, argv) < 0) {
     usage(stderr, argv[0]);
     return 1;
   }
 
+  if (filter_parse(&flt, opts.filter_argc, opts.filter_argv) < 0)
+    return 1;
+
   cfg.ifname = opts.ifname;
   cfg.out_path = opts.out_path;
+  cfg.filter = &flt;
   cfg.pkt_limit = opts.pkt_limit;
   cfg.time_limit = opts.time_limit;
 
-  (void)opts.filter_argc;
-  (void)opts.filter_argv;
-  return capture_run(&cfg) < 0;
+  rc = capture_run(&cfg);
+  filter_free(&flt);
+  return rc < 0;
 }

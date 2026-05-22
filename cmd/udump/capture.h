@@ -1,9 +1,12 @@
 #ifndef UDUMP_CAPTURE_H
 #define UDUMP_CAPTURE_H
 
+struct filter;
+
 struct capture_cfg {
   const char *ifname;
   const char *out_path;
+  const struct filter *filter;
   unsigned long long pkt_limit;
   unsigned int time_limit;
 };
