@@ -85,6 +85,11 @@ static int bpf_emit_fail_jump(struct bpf_prog *prog, unsigned short code,
   return bpf_emit(prog, insn);
 }
 
+static int bpf_emit_fail_jump_x(struct bpf_prog *prog, unsigned short code)
+{
+  return bpf_emit_fail_jump(prog, code, 0);
+}
+
 static int bpf_emit_jump(struct bpf_prog *prog, unsigned short code,
     unsigned int k, unsigned char jt, unsigned char jf)
 {
@@ -149,9 +154,92 @@ static int bpf_emit_mac_host(struct bpf_prog *prog, const unsigned char *mac)
   return 0;
 }
 
+static int bpf_emit_ipv4(struct bpf_prog *prog)
+{
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_W | BPF_LEN, 0) < 0)
+    return -1;
+  if (bpf_emit_fail_jump(prog, BPF_JMP | BPF_JGE | BPF_K, 34) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_H | BPF_ABS, 12) < 0)
+    return -1;
+  if (bpf_emit_fail_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, 0x0800) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_B | BPF_ABS, 14) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_ALU | BPF_AND | BPF_K, 0xf0) < 0)
+    return -1;
+  if (bpf_emit_fail_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, 0x40) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_LDX | BPF_MSH | BPF_B, 14) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_MISC | BPF_TXA, 0) < 0)
+    return -1;
+  if (bpf_emit_fail_jump(prog, BPF_JMP | BPF_JGE | BPF_K, 20) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_H | BPF_ABS, 16) < 0)
+    return -1;
+  if (bpf_emit_fail_jump_x(prog, BPF_JMP | BPF_JGE | BPF_X) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_ALU | BPF_ADD | BPF_K, 14) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_MISC | BPF_TAX, 0) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_W | BPF_LEN, 0) < 0)
+    return -1;
+  if (bpf_emit_fail_jump_x(prog, BPF_JMP | BPF_JGE | BPF_X) < 0)
+    return -1;
+  return 0;
+}
+
+static int bpf_emit_ipv4_proto(struct bpf_prog *prog, unsigned int proto)
+{
+  if (bpf_emit_ipv4(prog) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_B | BPF_ABS, 23) < 0)
+    return -1;
+  if (bpf_emit_fail_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, proto) < 0)
+    return -1;
+  return 0;
+}
+
+static int bpf_emit_port(struct bpf_prog *prog, unsigned short port)
+{
+  if (bpf_emit_ipv4(prog) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_B | BPF_ABS, 23) < 0)
+    return -1;
+  if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, 6, 1, 0) < 0)
+    return -1;
+  if (bpf_emit_fail_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, 17) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_H | BPF_ABS, 20) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_ALU | BPF_AND | BPF_K, 0x1fff) < 0)
+    return -1;
+  if (bpf_emit_fail_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, 0) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_LDX | BPF_MSH | BPF_B, 14) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_H | BPF_IND, 14) < 0)
+    return -1;
+  if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, port, 1, 0) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_H | BPF_IND, 16) < 0)
+    return -1;
+  if (bpf_emit_fail_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, port) < 0)
+    return -1;
+  return 0;
+}
+
 static int bpf_compile_term(struct bpf_prog *prog, const struct filter_term *term)
 {
   switch (term->kind) {
+  case TERM_TCP:
+    return bpf_emit_ipv4_proto(prog, 6);
+  case TERM_UDP:
+    return bpf_emit_ipv4_proto(prog, 17);
+  case TERM_PORT:
+    return bpf_emit_port(prog, term->port);
   case TERM_ETHER_SRC:
     return bpf_emit_mac_eq(prog, 6, term->mac);
   case TERM_ETHER_DST:

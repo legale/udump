@@ -245,6 +245,23 @@ static void test_bpf_compile_ether(void)
     fail("test_bpf_compile_ether", "ether host bpf compile failed");
 }
 
+static void test_bpf_compile_l4(void)
+{
+  char *tcp[] = { "tcp" };
+  char *udp[] = { "udp" };
+  char *port[] = { "port", "22" };
+  char *combo[] = { "tcp", "port", "22" };
+
+  if (!bpf_compile_ok(1, tcp))
+    fail("test_bpf_compile_l4", "tcp bpf compile failed");
+  if (!bpf_compile_ok(1, udp))
+    fail("test_bpf_compile_l4", "udp bpf compile failed");
+  if (!bpf_compile_ok(2, port))
+    fail("test_bpf_compile_l4", "port bpf compile failed");
+  if (!bpf_compile_ok(3, combo))
+    fail("test_bpf_compile_l4", "tcp port bpf compile failed");
+}
+
 static void test_packet_parse(void)
 {
   unsigned char pkt[54] = {
@@ -388,6 +405,7 @@ int main(void)
   test_filter_parse();
   test_filter_match();
   test_bpf_compile_ether();
+  test_bpf_compile_l4();
   test_packet_parse();
   test_pcap_writer();
   test_fixture_tcp_port_22();
