@@ -8,6 +8,7 @@ struct pkt_info {
   unsigned short src_port;
   unsigned short dst_port;
   unsigned char is_ipv4;
+  unsigned char is_ipv6;
   unsigned char ip_proto;
   unsigned char has_ports;
 };

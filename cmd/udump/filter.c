@@ -425,9 +425,9 @@ static int filter_match_node(const struct filter_node *node,
     term = &node->term;
     switch (term->kind) {
     case TERM_TCP:
-      return pi->is_ipv4 && pi->ip_proto == 6;
+      return (pi->is_ipv4 || pi->is_ipv6) && pi->ip_proto == 6;
     case TERM_UDP:
-      return pi->is_ipv4 && pi->ip_proto == 17;
+      return (pi->is_ipv4 || pi->is_ipv6) && pi->ip_proto == 17;
     case TERM_PORT:
       if (!pi->has_ports)
         return 0;

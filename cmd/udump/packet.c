@@ -14,6 +14,7 @@ int packet_parse(struct pkt_info *pi, const void *buf, unsigned int len)
   unsigned int ip_off;
   unsigned int frag_off;
   unsigned int l4_off;
+  unsigned int payload_len;
   unsigned int version;
   unsigned int ihl;
 
@@ -28,7 +29,7 @@ int packet_parse(struct pkt_info *pi, const void *buf, unsigned int len)
   pi->ether_type = get_be16(p + 12);
 
   if (pi->ether_type != 0x0800)
-    return 0;
+    goto maybe_ipv6;
 
   if (len < 34)
     return -1;
@@ -58,6 +59,32 @@ int packet_parse(struct pkt_info *pi, const void *buf, unsigned int len)
   if ((pi->ip_proto == 6 || pi->ip_proto == 17) && ip_len >= ip_off + 4) {
     pi->src_port = get_be16((const unsigned char *)buf + l4_off + 0);
     pi->dst_port = get_be16((const unsigned char *)buf + l4_off + 2);
+    pi->has_ports = 1;
+  }
+
+  return 0;
+
+maybe_ipv6:
+  if (pi->ether_type != 0x86dd)
+    return 0;
+
+  if (len < 54)
+    return -1;
+
+  p = (const unsigned char *)buf + 14;
+  version = p[0] >> 4;
+  if (version != 6)
+    return -1;
+
+  payload_len = get_be16(p + 4);
+  if (len < 14 + 40 + payload_len)
+    return -1;
+
+  pi->is_ipv6 = 1;
+  pi->ip_proto = p[6];
+  if ((pi->ip_proto == 6 || pi->ip_proto == 17) && payload_len >= 4) {
+    pi->src_port = get_be16((const unsigned char *)buf + 54);
+    pi->dst_port = get_be16((const unsigned char *)buf + 56);
     pi->has_ports = 1;
   }
 

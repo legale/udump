@@ -350,6 +350,7 @@ static void test_filter_parse(void)
 static void test_filter_match(void)
 {
   struct pkt_info pi;
+  struct pkt_info pi6;
   char *tcp[] = { "tcp" };
   char *udp[] = { "udp" };
   char *port22[] = { "port", "22" };
@@ -369,6 +370,12 @@ static void test_filter_match(void)
   };
 
   fill_pkt(&pi);
+  memset(&pi6, 0, sizeof(pi6));
+  pi6.is_ipv6 = 1;
+  pi6.ip_proto = 17;
+  pi6.has_ports = 1;
+  pi6.src_port = 67;
+  pi6.dst_port = 68;
 
   if (!match_ok(1, tcp, &pi))
     fail("test_filter_match", "tcp did not match");
@@ -392,6 +399,12 @@ static void test_filter_match(void)
     fail("test_filter_match", "or filter false-positive");
   if (!match_ok(6, left_assoc, &pi))
     fail("test_filter_match", "left-assoc libpcap semantics mismatch");
+  if (!match_ok(1, udp, &pi6))
+    fail("test_filter_match", "udp ipv6 did not match");
+  if (!match_ok(2, (char *[]){"port", "67"}, &pi6))
+    fail("test_filter_match", "port 67 ipv6 did not match");
+  if (!match_fail(1, tcp, &pi6))
+    fail("test_filter_match", "tcp ipv6 matched udp packet");
 }
 
 static void test_bpf_compile_ether(void)
@@ -516,6 +529,18 @@ static void test_packet_parse(void)
     0x50, 0x00, 0, 0,
     0, 0, 0, 0
   };
+  unsigned char pkt6[58] = {
+    0, 1, 2, 3, 4, 5,
+    6, 7, 8, 9, 10, 11,
+    0x86, 0xdd,
+    0x60, 0x00, 0x00, 0x00,
+    0x00, 0x04, 0x11, 0x40,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 1,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 2,
+    0x00, 0x43, 0x00, 0x44
+  };
   struct pkt_info pi;
 
   if (packet_parse(&pi, pkt, sizeof(pkt)) < 0) {
@@ -527,6 +552,16 @@ static void test_packet_parse(void)
     fail("test_packet_parse", "missing parsed tcp fields");
   if (pi.src_port != 0x1234 || pi.dst_port != 0x0050)
     fail("test_packet_parse", "wrong parsed ports");
+
+  if (packet_parse(&pi, pkt6, sizeof(pkt6)) < 0) {
+    fail("test_packet_parse", "valid ipv6 udp packet rejected");
+    return;
+  }
+
+  if (!pi.is_ipv6 || pi.ip_proto != 17 || !pi.has_ports)
+    fail("test_packet_parse", "missing parsed ipv6 udp fields");
+  if (pi.src_port != 0x0043 || pi.dst_port != 0x0044)
+    fail("test_packet_parse", "wrong parsed ipv6 ports");
 }
 
 static void test_pcap_writer(void)
