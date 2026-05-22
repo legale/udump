@@ -11,6 +11,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "bpf.h"
 #include "capture.h"
 #include "filter.h"
 #include "packet.h"
@@ -100,6 +101,28 @@ static int wait_packet(int fd, unsigned long long deadline_ms)
   return ret;
 }
 
+static int attach_bpf(int fd, const struct filter *f)
+{
+  struct sock_fprog fprog;
+  struct bpf_prog prog;
+
+  if (!f || !f->nterms)
+    return 0;
+
+  if (bpf_compile(&prog, f) < 0)
+    return -1;
+
+  fprog = bpf_sock_fprog(&prog);
+  if (setsockopt(fd, SOL_SOCKET, SO_ATTACH_FILTER, &fprog, sizeof(fprog)) < 0) {
+    perror("setsockopt(SO_ATTACH_FILTER)");
+    bpf_prog_free(&prog);
+    return -1;
+  }
+
+  bpf_prog_free(&prog);
+  return 0;
+}
+
 int capture_run(const struct capture_cfg *cfg)
 {
   unsigned char buf[65536];
@@ -117,6 +140,12 @@ int capture_run(const struct capture_cfg *cfg)
 
   fd = open_socket(cfg->ifname);
   if (fd < 0) {
+    pcap_close(&pw);
+    return -1;
+  }
+
+  if (attach_bpf(fd, cfg->filter) < 0) {
+    close(fd);
     pcap_close(&pw);
     return -1;
   }
