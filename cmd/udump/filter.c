@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "filter.h"
+#include "packet.h"
 
 static int hex_digit(int ch)
 {
@@ -146,6 +147,48 @@ err_ether:
 err:
   filter_free(f);
   return -1;
+}
+
+int filter_match(const struct filter *f, const struct pkt_info *pi)
+{
+  const struct filter_term *term;
+  int i;
+
+  for (i = 0; i < f->nterms; i++) {
+    term = &f->terms[i];
+
+    switch (term->kind) {
+    case TERM_TCP:
+      if (!pi->is_ipv4 || pi->ip_proto != 6)
+        return 0;
+      break;
+    case TERM_UDP:
+      if (!pi->is_ipv4 || pi->ip_proto != 17)
+        return 0;
+      break;
+    case TERM_PORT:
+      if (!pi->has_ports)
+        return 0;
+      if (pi->src_port != term->port && pi->dst_port != term->port)
+        return 0;
+      break;
+    case TERM_ETHER_SRC:
+      if (memcmp(pi->src_mac, term->mac, 6))
+        return 0;
+      break;
+    case TERM_ETHER_DST:
+      if (memcmp(pi->dst_mac, term->mac, 6))
+        return 0;
+      break;
+    case TERM_ETHER_HOST:
+      if (memcmp(pi->src_mac, term->mac, 6) &&
+          memcmp(pi->dst_mac, term->mac, 6))
+        return 0;
+      break;
+    }
+  }
+
+  return 1;
 }
 
 void filter_free(struct filter *f)

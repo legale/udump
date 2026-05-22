@@ -21,7 +21,10 @@ struct filter {
   int nterms;
 };
 
+struct pkt_info;
+
 int filter_parse(struct filter *f, int argc, char **argv);
+int filter_match(const struct filter *f, const struct pkt_info *pi);
 void filter_free(struct filter *f);
 
 #endif
