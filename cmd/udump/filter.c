@@ -63,9 +63,133 @@ static int need_more(const char *what)
   return -1;
 }
 
+static struct filter_node *node_alloc(void)
+{
+  struct filter_node *node;
+
+  node = calloc(1, sizeof(*node));
+  if (!node)
+    perror("calloc");
+  return node;
+}
+
+static struct filter_node *node_term(enum filter_term_kind kind)
+{
+  struct filter_node *node;
+
+  node = node_alloc();
+  if (!node)
+    return NULL;
+
+  node->kind = NODE_TERM;
+  node->term.kind = kind;
+  return node;
+}
+
+static struct filter_node *node_and(struct filter_node *lhs,
+    struct filter_node *rhs)
+{
+  struct filter_node *node;
+
+  node = node_alloc();
+  if (!node)
+    return NULL;
+
+  node->kind = NODE_AND;
+  node->expr.lhs = lhs;
+  node->expr.rhs = rhs;
+  return node;
+}
+
+static void filter_free_node(struct filter_node *node)
+{
+  if (!node)
+    return;
+
+  if (node->kind == NODE_AND || node->kind == NODE_OR) {
+    filter_free_node(node->expr.lhs);
+    filter_free_node(node->expr.rhs);
+  }
+
+  free(node);
+}
+
+static struct filter_node *parse_atom(int argc, char **argv, int *used)
+{
+  struct filter_node *node;
+
+  if (!argc)
+    return NULL;
+
+  *used = 0;
+
+  if (!strcmp(argv[0], "tcp")) {
+    *used = 1;
+    return node_term(TERM_TCP);
+  }
+
+  if (!strcmp(argv[0], "udp")) {
+    *used = 1;
+    return node_term(TERM_UDP);
+  }
+
+  if (!strcmp(argv[0], "port")) {
+    if (argc < 2) {
+      need_more("port value");
+      return NULL;
+    }
+
+    node = node_term(TERM_PORT);
+    if (!node)
+      return NULL;
+
+    if (parse_port(argv[1], &node->term.port) < 0) {
+      free(node);
+      return NULL;
+    }
+
+    *used = 2;
+    return node;
+  }
+
+  if (!strcmp(argv[0], "ether")) {
+    if (argc < 3) {
+      need_more("ether filter");
+      return NULL;
+    }
+
+    if (!strcmp(argv[1], "src"))
+      node = node_term(TERM_ETHER_SRC);
+    else if (!strcmp(argv[1], "dst"))
+      node = node_term(TERM_ETHER_DST);
+    else if (!strcmp(argv[1], "host"))
+      node = node_term(TERM_ETHER_HOST);
+    else {
+      fprintf(stderr, "unsupported ether qualifier: %s\n", argv[1]);
+      return NULL;
+    }
+    if (!node)
+      return NULL;
+
+    if (parse_mac(argv[2], node->term.mac) < 0) {
+      fprintf(stderr, "invalid mac: %s\n", argv[2]);
+      free(node);
+      return NULL;
+    }
+
+    *used = 3;
+    return node;
+  }
+
+  fprintf(stderr, "unsupported filter token: %s\n", argv[0]);
+  return NULL;
+}
+
 int filter_parse(struct filter *f, int argc, char **argv)
 {
-  struct filter_term *term;
+  struct filter_node *node;
+  struct filter_node *root;
+  int used;
   int i;
 
   memset(f, 0, sizeof(*f));
@@ -73,127 +197,83 @@ int filter_parse(struct filter *f, int argc, char **argv)
   if (!argc)
     return 0;
 
-  f->terms = calloc((size_t)argc, sizeof(*f->terms));
-  if (!f->terms) {
-    perror("calloc");
-    return -1;
-  }
-
+  root = NULL;
   i = 0;
   while (i < argc) {
-    term = &f->terms[f->nterms];
+    node = parse_atom(argc - i, argv + i, &used);
+    if (!node)
+      goto err;
 
-    if (!strcmp(argv[i], "tcp")) {
-      term->kind = TERM_TCP;
-      f->nterms++;
-      i++;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "udp")) {
-      term->kind = TERM_UDP;
-      f->nterms++;
-      i++;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "port")) {
-      if (i + 1 >= argc)
-        goto err_port;
-      if (parse_port(argv[i + 1], &term->port) < 0)
-        goto err;
-      term->kind = TERM_PORT;
-      f->nterms++;
-      i += 2;
-      continue;
-    }
-
-    if (!strcmp(argv[i], "ether")) {
-      if (i + 2 >= argc)
-        goto err_ether;
-
-      if (!strcmp(argv[i + 1], "src"))
-        term->kind = TERM_ETHER_SRC;
-      else if (!strcmp(argv[i + 1], "dst"))
-        term->kind = TERM_ETHER_DST;
-      else if (!strcmp(argv[i + 1], "host"))
-        term->kind = TERM_ETHER_HOST;
-      else {
-        fprintf(stderr, "unsupported ether qualifier: %s\n", argv[i + 1]);
+    if (!root) {
+      root = node;
+    } else {
+      root = node_and(root, node);
+      if (!root) {
+        filter_free_node(node);
         goto err;
       }
-
-      if (parse_mac(argv[i + 2], term->mac) < 0) {
-        fprintf(stderr, "invalid mac: %s\n", argv[i + 2]);
-        goto err;
-      }
-
-      f->nterms++;
-      i += 3;
-      continue;
     }
 
-    fprintf(stderr, "unsupported filter token: %s\n", argv[i]);
-    goto err;
+    i += used;
   }
 
+  f->root = root;
   return 0;
 
-err_port:
-  need_more("port value");
-  goto err;
-err_ether:
-  need_more("ether filter");
 err:
   filter_free(f);
   return -1;
 }
 
-int filter_match(const struct filter *f, const struct pkt_info *pi)
+static int filter_match_node(const struct filter_node *node,
+    const struct pkt_info *pi)
 {
   const struct filter_term *term;
-  int i;
 
-  for (i = 0; i < f->nterms; i++) {
-    term = &f->terms[i];
+  if (!node)
+    return 1;
 
+  switch (node->kind) {
+  case NODE_TERM:
+    term = &node->term;
     switch (term->kind) {
     case TERM_TCP:
-      if (!pi->is_ipv4 || pi->ip_proto != 6)
-        return 0;
-      break;
+      return pi->is_ipv4 && pi->ip_proto == 6;
     case TERM_UDP:
-      if (!pi->is_ipv4 || pi->ip_proto != 17)
-        return 0;
-      break;
+      return pi->is_ipv4 && pi->ip_proto == 17;
     case TERM_PORT:
       if (!pi->has_ports)
         return 0;
-      if (pi->src_port != term->port && pi->dst_port != term->port)
-        return 0;
-      break;
+      return pi->src_port == term->port || pi->dst_port == term->port;
     case TERM_ETHER_SRC:
-      if (memcmp(pi->src_mac, term->mac, 6))
-        return 0;
-      break;
+      return !memcmp(pi->src_mac, term->mac, 6);
     case TERM_ETHER_DST:
-      if (memcmp(pi->dst_mac, term->mac, 6))
-        return 0;
-      break;
+      return !memcmp(pi->dst_mac, term->mac, 6);
     case TERM_ETHER_HOST:
-      if (memcmp(pi->src_mac, term->mac, 6) &&
-          memcmp(pi->dst_mac, term->mac, 6))
-        return 0;
-      break;
+      return !memcmp(pi->src_mac, term->mac, 6) ||
+          !memcmp(pi->dst_mac, term->mac, 6);
     }
+    return 0;
+  case NODE_AND:
+    if (!filter_match_node(node->expr.lhs, pi))
+      return 0;
+    return filter_match_node(node->expr.rhs, pi);
+  case NODE_OR:
+    if (filter_match_node(node->expr.lhs, pi))
+      return 1;
+    return filter_match_node(node->expr.rhs, pi);
   }
 
-  return 1;
+  return 0;
+}
+
+int filter_match(const struct filter *f, const struct pkt_info *pi)
+{
+  return filter_match_node(f->root, pi);
 }
 
 void filter_free(struct filter *f)
 {
-  free(f->terms);
-  f->terms = NULL;
-  f->nterms = 0;
+  filter_free_node(f->root);
+  f->root = NULL;
 }

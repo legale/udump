@@ -106,7 +106,7 @@ static int attach_bpf(int fd, const struct filter *f)
   struct sock_fprog fprog;
   struct bpf_prog prog;
 
-  if (!f || !f->nterms)
+  if (!f || !f->root)
     return 0;
 
   if (bpf_compile(&prog, f) < 0)
@@ -184,7 +184,7 @@ int capture_run(const struct capture_cfg *cfg)
     }
 
     if (cfg->filter_mode == FILTER_MODE_USER &&
-        cfg->filter && cfg->filter->nterms) {
+        cfg->filter && cfg->filter->root) {
       if (packet_parse(&pi, buf, (unsigned int)len) < 0)
         continue;
       if (!filter_match(cfg->filter, &pi))

@@ -252,6 +252,24 @@ static int bpf_compile_term(struct bpf_prog *prog, const struct filter_term *ter
   }
 }
 
+static int bpf_compile_node(struct bpf_prog *prog, const struct filter_node *node)
+{
+  switch (node->kind) {
+  case NODE_TERM:
+    return bpf_compile_term(prog, &node->term);
+  case NODE_AND:
+    if (bpf_compile_node(prog, node->expr.lhs) < 0)
+      return -1;
+    return bpf_compile_node(prog, node->expr.rhs);
+  case NODE_OR:
+    fprintf(stderr, "bpf compiler: boolean or not supported yet\n");
+    return -1;
+  }
+
+  fprintf(stderr, "bpf compiler: bad node kind: %d\n", node->kind);
+  return -1;
+}
+
 static int bpf_patch_fails(struct bpf_prog *prog)
 {
   unsigned short reject;
@@ -280,17 +298,13 @@ static int bpf_patch_fails(struct bpf_prog *prog)
 
 int bpf_compile(struct bpf_prog *prog, const struct filter *f)
 {
-  int i;
-
   memset(prog, 0, sizeof(*prog));
 
-  if (!f->nterms)
+  if (!f->root)
     return bpf_emit_stmt(prog, BPF_RET | BPF_K, SNAPLEN);
 
-  for (i = 0; i < f->nterms; i++) {
-    if (bpf_compile_term(prog, &f->terms[i]) < 0)
-      goto err;
-  }
+  if (bpf_compile_node(prog, f->root) < 0)
+    goto err;
 
   if (bpf_patch_fails(prog) < 0)
     goto err;

@@ -16,9 +16,25 @@ struct filter_term {
   unsigned char mac[6];
 };
 
+enum filter_node_kind {
+  NODE_TERM,
+  NODE_AND,
+  NODE_OR,
+};
+
+struct filter_node {
+  enum filter_node_kind kind;
+  union {
+    struct filter_term term;
+    struct {
+      struct filter_node *lhs;
+      struct filter_node *rhs;
+    } expr;
+  };
+};
+
 struct filter {
-  struct filter_term *terms;
-  int nterms;
+  struct filter_node *root;
 };
 
 struct pkt_info;

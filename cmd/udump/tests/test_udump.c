@@ -77,10 +77,32 @@ static int next_pcap_record(FILE *fp, unsigned char *buf, size_t buf_sz,
 static int parse_ok(int argc, char **argv, int expect_terms)
 {
   struct filter f;
+  int terms;
 
   if (filter_parse(&f, argc, argv) < 0)
     return 0;
-  if (f.nterms != expect_terms) {
+
+  terms = 0;
+  if (f.root) {
+    const struct filter_node *stack[64];
+    int sp;
+
+    sp = 0;
+    stack[sp++] = f.root;
+    while (sp) {
+      const struct filter_node *node;
+
+      node = stack[--sp];
+      if (node->kind == NODE_TERM) {
+        terms++;
+        continue;
+      }
+      stack[sp++] = node->expr.rhs;
+      stack[sp++] = node->expr.lhs;
+    }
+  }
+
+  if (terms != expect_terms) {
     filter_free(&f);
     return 0;
   }
