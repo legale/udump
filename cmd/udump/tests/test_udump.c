@@ -6,6 +6,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../bpf.h"
 #include "../filter.h"
 #include "../packet.h"
 #include "../pcap.h"
@@ -156,6 +157,28 @@ static int match_fail(int argc, char **argv, struct pkt_info *pi)
   return !match_ok(argc, argv, pi);
 }
 
+static int bpf_compile_ok(int argc, char **argv)
+{
+  struct bpf_prog prog;
+  struct filter f;
+  int ok;
+
+  if (filter_parse(&f, argc, argv) < 0)
+    return 0;
+
+  ok = bpf_compile(&prog, &f) == 0;
+  if (ok) {
+    if (!prog.len)
+      ok = 0;
+    else if (prog.insns[prog.len - 1].code != (BPF_RET | BPF_K))
+      ok = 0;
+    bpf_prog_free(&prog);
+  }
+
+  filter_free(&f);
+  return ok;
+}
+
 static void test_filter_parse(void)
 {
   char *tcp[] = { "tcp" };
@@ -206,6 +229,20 @@ static void test_filter_match(void)
     fail("test_filter_match", "ether host did not match");
   if (!match_ok(6, combo, &pi))
     fail("test_filter_match", "combined filter did not match");
+}
+
+static void test_bpf_compile_ether(void)
+{
+  char *src[] = { "ether", "src", "aa:bb:cc:dd:ee:ff" };
+  char *dst[] = { "ether", "dst", "10:20:30:40:50:60" };
+  char *host[] = { "ether", "host", "10:20:30:40:50:60" };
+
+  if (!bpf_compile_ok(3, src))
+    fail("test_bpf_compile_ether", "ether src bpf compile failed");
+  if (!bpf_compile_ok(3, dst))
+    fail("test_bpf_compile_ether", "ether dst bpf compile failed");
+  if (!bpf_compile_ok(3, host))
+    fail("test_bpf_compile_ether", "ether host bpf compile failed");
 }
 
 static void test_packet_parse(void)
@@ -350,6 +387,7 @@ int main(void)
 {
   test_filter_parse();
   test_filter_match();
+  test_bpf_compile_ether();
   test_packet_parse();
   test_pcap_writer();
   test_fixture_tcp_port_22();

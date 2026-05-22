@@ -1,0 +1,21 @@
+#ifndef UDUMP_BPF_H
+#define UDUMP_BPF_H
+
+#include <linux/filter.h>
+
+struct filter;
+
+struct bpf_prog {
+  struct sock_filter *insns;
+  unsigned short len;
+  unsigned short cap;
+  unsigned short *fails;
+  unsigned short nfails;
+  unsigned short fail_cap;
+};
+
+int bpf_compile(struct bpf_prog *prog, const struct filter *f);
+void bpf_prog_free(struct bpf_prog *prog);
+struct sock_fprog bpf_sock_fprog(struct bpf_prog *prog);
+
+#endif

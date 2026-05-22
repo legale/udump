@@ -9,9 +9,9 @@ SAN_CFLAGS ?= -O1 -g -Wall -Wextra
 .PHONY: all static clean test san
 
 BIN = udump
-OBJS = main.o capture.o pcap.o packet.o filter.o
+OBJS = main.o capture.o pcap.o packet.o filter.o bpf.o
 TEST_BIN = tests/test_udump
-TEST_OBJS = tests/test_udump.o filter.o packet.o pcap.o
+TEST_OBJS = tests/test_udump.o filter.o packet.o pcap.o bpf.o
 
 all: $(BIN)
 
