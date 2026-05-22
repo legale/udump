@@ -315,20 +315,36 @@ static void test_filter_parse(void)
 {
   char *tcp[] = { "tcp" };
   char *combo[] = { "ether", "host", "aa:bb:cc:dd:ee:ff", "port", "53" };
+  char *udp_ports[] = {
+    "udp", "port", "67", "or", "udp", "port", "68"
+  };
+  char *grouped[] = {
+    "(", "tcp", "or", "udp", ")", "and", "port", "53"
+  };
   char *bad_tok[] = { "foo" };
   char *bad_port[] = { "port", "70000" };
   char *bad_mac[] = { "ether", "src", "aa:bb" };
+  char *bad_group[] = { "(", ")" };
+  char *bad_op[] = { "tcp", "or", "and", "udp" };
 
   if (!parse_ok(1, tcp, 1))
     fail("test_filter_parse", "tcp parse failed");
   if (!parse_ok(5, combo, 2))
     fail("test_filter_parse", "combo parse failed");
+  if (!parse_ok(7, udp_ports, 4))
+    fail("test_filter_parse", "udp port/or parse failed");
+  if (!parse_ok(8, grouped, 3))
+    fail("test_filter_parse", "grouped parse failed");
   if (!parse_fail(1, bad_tok))
     fail("test_filter_parse", "bad token accepted");
   if (!parse_fail(2, bad_port))
     fail("test_filter_parse", "bad port accepted");
   if (!parse_fail(3, bad_mac))
     fail("test_filter_parse", "bad mac accepted");
+  if (!parse_fail(2, bad_group))
+    fail("test_filter_parse", "empty group accepted");
+  if (!parse_fail(4, bad_op))
+    fail("test_filter_parse", "bad operators accepted");
 }
 
 static void test_filter_match(void)
@@ -342,6 +358,15 @@ static void test_filter_match(void)
   char *dst[] = { "ether", "dst", "10:20:30:40:50:60" };
   char *host[] = { "ether", "host", "10:20:30:40:50:60" };
   char *combo[] = { "tcp", "port", "22", "ether", "src", "aa:bb:cc:dd:ee:ff" };
+  char *or_match[] = {
+    "udp", "port", "53", "or", "tcp", "port", "22"
+  };
+  char *or_fail[] = {
+    "udp", "port", "53", "or", "tcp", "port", "80"
+  };
+  char *left_assoc[] = {
+    "tcp", "or", "udp", "and", "port", "22"
+  };
 
   fill_pkt(&pi);
 
@@ -361,6 +386,12 @@ static void test_filter_match(void)
     fail("test_filter_match", "ether host did not match");
   if (!match_ok(6, combo, &pi))
     fail("test_filter_match", "combined filter did not match");
+  if (!match_ok(7, or_match, &pi))
+    fail("test_filter_match", "or filter did not match");
+  if (!match_fail(7, or_fail, &pi))
+    fail("test_filter_match", "or filter false-positive");
+  if (!match_ok(6, left_assoc, &pi))
+    fail("test_filter_match", "left-assoc libpcap semantics mismatch");
 }
 
 static void test_bpf_compile_ether(void)
