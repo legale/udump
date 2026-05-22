@@ -9,9 +9,6 @@ struct bpf_prog {
   struct sock_filter *insns;
   unsigned short len;
   unsigned short cap;
-  unsigned short *fails;
-  unsigned short nfails;
-  unsigned short fail_cap;
 };
 
 int bpf_compile(struct bpf_prog *prog, const struct filter *f);

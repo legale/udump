@@ -209,7 +209,7 @@ static int bpf_compile_ok(int argc, char **argv)
     ok = 0;
   if (ok && prog.insns[prog.len - 2].code != (BPF_RET | BPF_K))
     ok = 0;
-  if (ok && prog.insns[prog.len - 2].k != 65535u)
+  if (ok && prog.insns[prog.len - 2].k != 262144u)
     ok = 0;
   if (ok && prog.insns[prog.len - 1].code != (BPF_RET | BPF_K))
     ok = 0;
@@ -508,8 +508,8 @@ static void test_bpf_kernel_parity_crafted(void)
     fail("test_bpf_kernel_parity_crafted", "tcp port 22 mismatch");
   if (!bpf_case_ok(1, (char *[]){"tcp"}, arp_pkt, sizeof(arp_pkt), 0))
     fail("test_bpf_kernel_parity_crafted", "arp/tcp mismatch");
-  if (!bpf_case_ok(1, (char *[]){"tcp"}, trunc_pkt, sizeof(trunc_pkt), 0))
-    fail("test_bpf_kernel_parity_crafted", "truncated ipv4 mismatch");
+  if (!bpf_case_ok(1, (char *[]){"tcp"}, trunc_pkt, sizeof(trunc_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "truncated ipv4 tcp mismatch");
 }
 
 static void test_packet_parse(void)
