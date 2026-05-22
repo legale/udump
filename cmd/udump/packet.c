@@ -1,0 +1,65 @@
+#include <string.h>
+
+#include "packet.h"
+
+static unsigned short get_be16(const unsigned char *p)
+{
+  return (unsigned short)((p[0] << 8) | p[1]);
+}
+
+int packet_parse(struct pkt_info *pi, const void *buf, unsigned int len)
+{
+  const unsigned char *p;
+  unsigned int ip_len;
+  unsigned int ip_off;
+  unsigned int frag_off;
+  unsigned int l4_off;
+  unsigned int version;
+  unsigned int ihl;
+
+  memset(pi, 0, sizeof(*pi));
+
+  if (len < 14)
+    return -1;
+
+  p = buf;
+  memcpy(pi->dst_mac, p + 0, 6);
+  memcpy(pi->src_mac, p + 6, 6);
+  pi->ether_type = get_be16(p + 12);
+
+  if (pi->ether_type != 0x0800)
+    return 0;
+
+  if (len < 34)
+    return -1;
+
+  p += 14;
+  version = p[0] >> 4;
+  ihl = (p[0] & 0x0f) * 4;
+  if (version != 4 || ihl < 20)
+    return -1;
+
+  ip_len = get_be16(p + 2);
+  if (ip_len < ihl)
+    return -1;
+
+  if (len < 14 + ip_len)
+    return -1;
+
+  pi->is_ipv4 = 1;
+  pi->ip_proto = p[9];
+
+  frag_off = get_be16(p + 6);
+  if (frag_off & 0x1fff)
+    return 0;
+
+  l4_off = 14 + ihl;
+  ip_off = ihl;
+  if ((pi->ip_proto == 6 || pi->ip_proto == 17) && ip_len >= ip_off + 4) {
+    pi->src_port = get_be16((const unsigned char *)buf + l4_off + 0);
+    pi->dst_port = get_be16((const unsigned char *)buf + l4_off + 2);
+    pi->has_ports = 1;
+  }
+
+  return 0;
+}
