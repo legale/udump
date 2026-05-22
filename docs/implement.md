@@ -63,3 +63,42 @@ capabilities, формат команды с `-i <ifname>`, `-w <output_file>`,
 `-c <count>` и `-G <seconds>`, ограничения, примеры фильтров, формат выходного
 файла `pcap`, список поддерживаемого функционала и явно неподдерживаемых
 возможностей, включая отсутствие печати разбора пакетов на экран.
+
+12. `bpf: add classic bpf program builder for supported filter subset`
+Добавить внутренний генератор classic BPF без libpcap и без JIT-зависимостей:
+по уже разобранному минимальному AST собирать `struct sock_filter[]` и
+`struct sock_fprog` для текущего подмножества выражений `tcp`, `udp`,
+`port <n>`, `ether src <mac>`, `ether dst <mac>`, `ether host <mac>`, с тем же
+неявным `and`, что и в userspace-фильтре.
+
+13. `bpf: compile l2 and ipv4 port predicates to socket filter bytecode`
+Реализовать генерацию инструкций для проверок Ethernet source/destination MAC,
+EtherType IPv4, IPv4 protocol и TCP/UDP source/destination port. Для `port`
+сразу закладывать безопасные проверки длины, IPv4 IHL и нужного смещения, чтобы
+ядро отбрасывало неподходящие кадры до передачи в userspace.
+
+14. `udump: attach compiled bpf to packet socket by default`
+Подключить генерацию и `setsockopt(..., SO_ATTACH_FILTER, ...)` в основном пути
+запуска. Если фильтр задан и он поддерживается компилятором, по умолчанию
+вешать BPF на сокет и принимать в userspace только уже отфильтрованные пакеты.
+При отсутствии фильтра сокет оставлять без BPF.
+
+15. `udump: keep userspace filtering as explicit fallback mode`
+Оставить текущую userspace-фильтрацию как опциональный режим. Добавить явный
+ключ выбора, например `--filter-mode=user`, чтобы можно было принудительно
+обойти kernel BPF для отладки и сравнения поведения. Дефолтным режимом должен
+быть `bpf`, а при ошибке компиляции поддерживаемого фильтра программа должна
+завершаться с понятной ошибкой, а не молча переключаться на userspace.
+
+16. `test: compare classic bpf path with userspace matcher`
+Добавить тесты, которые проверяют генерацию `sock_fprog` для каждого
+поддержанного примитива и сверяют поведение kernel BPF пути с текущим
+userspace matcher на одинаковых фикстурах. Отдельно проверить, что `tcpdump`
+нормально читает `pcap`, записанный при захвате с включённым BPF на сокете.
+
+17. `docs: document default kernel filtering and fallback mode`
+Обновить `README.md` и описание ограничений: фильтр по умолчанию компилируется
+в classic BPF и крепится к сокету, userspace-фильтрация остаётся только как
+явный fallback-режим, перечислить поддерживаемое подмножество выражений и
+зафиксировать, что это минимальный аналог `pcap_compile`, а не совместимость
+со всем синтаксисом libpcap.
