@@ -530,6 +530,50 @@ static void test_bpf_kernel_parity_crafted(void)
     fail("test_bpf_kernel_parity_crafted", "truncated ipv4 tcp mismatch");
 }
 
+static void test_bpf_libpcap_semantics(void)
+{
+  unsigned char tcp_pkt[54] = {
+    0x10, 0x20, 0x30, 0x40, 0x50, 0x60,
+    0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+    0x08, 0x00,
+    0x45, 0x00, 0x00, 0x28,
+    0x00, 0x00, 0x00, 0x00,
+    0x40, 0x06, 0x00, 0x00,
+    127, 0, 0, 1,
+    127, 0, 0, 1,
+    0x30, 0x39, 0x00, 0x16,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0x50, 0x00, 0, 0,
+    0, 0, 0, 0
+  };
+  unsigned char udp53_pkt[42] = {
+    0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
+    0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+    0x08, 0x00,
+    0x45, 0x00, 0x00, 0x1c,
+    0x00, 0x00, 0x00, 0x00,
+    0x40, 0x11, 0x00, 0x00,
+    127, 0, 0, 1,
+    127, 0, 0, 1,
+    0x00, 0x35, 0x1f, 0x90,
+    0x00, 0x08, 0x00, 0x00
+  };
+
+  if (!bpf_case_ok(6, (char *[]){"tcp", "or", "udp", "and", "port", "53"},
+      tcp_pkt, sizeof(tcp_pkt), 0))
+    fail("test_bpf_libpcap_semantics", "left-assoc tcp/udp/port mismatch");
+  if (!bpf_case_ok(6, (char *[]){"tcp", "or", "udp", "and", "port", "53"},
+      udp53_pkt, sizeof(udp53_pkt), 1))
+    fail("test_bpf_libpcap_semantics", "left-assoc udp/port mismatch");
+  if (!bpf_case_ok(8, (char *[]){"(", "tcp", "or", "udp", ")", "and", "port", "53"},
+      udp53_pkt, sizeof(udp53_pkt), 1))
+    fail("test_bpf_libpcap_semantics", "grouped tcp/udp/port mismatch");
+  if (!bpf_case_ok(8, (char *[]){"tcp", "or", "(", "udp", "and", "port", "53", ")"},
+      tcp_pkt, sizeof(tcp_pkt), 1))
+    fail("test_bpf_libpcap_semantics", "explicit right-group mismatch");
+}
+
 static void test_packet_parse(void)
 {
   unsigned char pkt[54] = {
@@ -745,6 +789,62 @@ static void test_bpf_fixture_parity(void)
   fclose(fp);
 }
 
+static void test_bpf_fixture_or_parity(void)
+{
+  unsigned char buf[65536];
+  struct bpf_prog prog;
+  struct filter f;
+  unsigned int caplen;
+  int user_match;
+  int kern_match;
+  int rc;
+  FILE *fp;
+
+  fp = fopen(FIXTURE_PATH, "rb");
+  if (!fp) {
+    fail("test_bpf_fixture_or_parity", "fixture open failed");
+    return;
+  }
+
+  if (fseek(fp, 24, SEEK_SET) < 0) {
+    fail("test_bpf_fixture_or_parity", "fixture seek failed");
+    fclose(fp);
+    return;
+  }
+
+  if (compile_filter(&f, &prog, 7,
+      (char *[]){"tcp", "port", "22", "or", "udp", "port", "53"}) < 0) {
+    fail("test_bpf_fixture_or_parity", "filter compile failed");
+    fclose(fp);
+    return;
+  }
+
+  for (;;) {
+    rc = next_pcap_record(fp, buf, sizeof(buf), &caplen);
+    if (rc == 0)
+      break;
+    if (rc < 0) {
+      fail("test_bpf_fixture_or_parity", "pcap record read failed");
+      break;
+    }
+
+    user_match = userspace_match_raw(&f, buf, caplen);
+    if (kernel_match_raw(&prog, buf, caplen, &kern_match) < 0) {
+      fail("test_bpf_fixture_or_parity", "kernel match failed");
+      break;
+    }
+
+    if (user_match != kern_match) {
+      fail("test_bpf_fixture_or_parity", "kernel/user mismatch on fixture");
+      break;
+    }
+  }
+
+  bpf_prog_free(&prog);
+  filter_free(&f);
+  fclose(fp);
+}
+
 int main(void)
 {
   test_filter_parse();
@@ -752,10 +852,12 @@ int main(void)
   test_bpf_compile_ether();
   test_bpf_compile_l4();
   test_bpf_kernel_parity_crafted();
+  test_bpf_libpcap_semantics();
   test_packet_parse();
   test_pcap_writer();
   test_fixture_tcp_port_22();
   test_bpf_fixture_parity();
+  test_bpf_fixture_or_parity();
 
   if (failures)
     return 1;
