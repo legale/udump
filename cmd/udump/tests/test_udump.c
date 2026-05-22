@@ -427,6 +427,7 @@ static void test_bpf_compile_l4(void)
   char *udp[] = { "udp" };
   char *port[] = { "port", "22" };
   char *combo[] = { "tcp", "port", "22" };
+  char *or_ports[] = { "udp", "port", "67", "or", "udp", "port", "68" };
 
   if (!bpf_compile_ok(1, tcp))
     fail("test_bpf_compile_l4", "tcp bpf compile failed");
@@ -436,6 +437,8 @@ static void test_bpf_compile_l4(void)
     fail("test_bpf_compile_l4", "port bpf compile failed");
   if (!bpf_compile_ok(3, combo))
     fail("test_bpf_compile_l4", "tcp port bpf compile failed");
+  if (!bpf_compile_ok(7, or_ports))
+    fail("test_bpf_compile_l4", "udp port or bpf compile failed");
 }
 
 static void test_bpf_kernel_parity_crafted(void)
@@ -467,6 +470,18 @@ static void test_bpf_kernel_parity_crafted(void)
     0x00, 0x35, 0x1f, 0x90,
     0x00, 0x08, 0x00, 0x00
   };
+  unsigned char udp67_pkt[42] = {
+    0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
+    0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+    0x08, 0x00,
+    0x45, 0x00, 0x00, 0x1c,
+    0x00, 0x00, 0x00, 0x00,
+    0x40, 0x11, 0x00, 0x00,
+    127, 0, 0, 1,
+    127, 0, 0, 1,
+    0x00, 0x43, 0x00, 0x44,
+    0x00, 0x08, 0x00, 0x00
+  };
   unsigned char arp_pkt[14] = {
     0x10, 0x20, 0x30, 0x40, 0x50, 0x60,
     0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
@@ -491,6 +506,9 @@ static void test_bpf_kernel_parity_crafted(void)
     fail("test_bpf_kernel_parity_crafted", "port 22 mismatch");
   if (!bpf_case_ok(2, (char *[]){"port", "53"}, udp_pkt, sizeof(udp_pkt), 1))
     fail("test_bpf_kernel_parity_crafted", "port 53 mismatch");
+  if (!bpf_case_ok(7, (char *[]){"udp", "port", "67", "or", "udp", "port", "68"},
+      udp67_pkt, sizeof(udp67_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "udp port or mismatch");
   if (!bpf_case_ok(3, (char *[]){"ether", "src", "aa:bb:cc:dd:ee:ff"},
       tcp_pkt, sizeof(tcp_pkt), 1))
     fail("test_bpf_kernel_parity_crafted", "ether src mismatch");

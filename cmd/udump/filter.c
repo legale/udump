@@ -86,6 +86,18 @@ static struct filter_node *node_term(enum filter_term_kind kind)
   return node;
 }
 
+static struct filter_node *node_term_copy(const struct filter_term *term)
+{
+  struct filter_node *node;
+
+  node = node_term(term->kind);
+  if (!node)
+    return NULL;
+
+  node->term = *term;
+  return node;
+}
+
 static struct filter_node *node_and(struct filter_node *lhs,
     struct filter_node *rhs)
 {
@@ -338,6 +350,161 @@ static struct filter_node *merge_expr(enum filter_node_kind kind,
   return node_or(lhs, rhs);
 }
 
+static int node_eq(const struct filter_node *lhs, const struct filter_node *rhs)
+{
+  if (lhs->kind != rhs->kind)
+    return 0;
+
+  if (lhs->kind == NODE_TERM)
+    return !memcmp(&lhs->term, &rhs->term, sizeof(lhs->term));
+
+  return node_eq(lhs->expr.lhs, rhs->expr.lhs) &&
+      node_eq(lhs->expr.rhs, rhs->expr.rhs);
+}
+
+static int collect_ports(const struct filter_term *term, unsigned short *ports,
+    int *nports)
+{
+  if (term->kind != TERM_PORT)
+    return -1;
+
+  ports[0] = term->port;
+  *nports = 1;
+
+  if (term->has_port_hi) {
+    if (term->port_hi == term->port)
+      return 0;
+    ports[1] = term->port_hi;
+    *nports = 2;
+  }
+
+  return 0;
+}
+
+static struct filter_node *normalize_merge_ports(const struct filter_node *lhs,
+    const struct filter_node *rhs)
+{
+  struct filter_term term;
+  unsigned short ports[2];
+  unsigned short rports[2];
+  int nports;
+  int nrports;
+  int i;
+  int j;
+  int seen;
+
+  if (lhs->kind != NODE_TERM || rhs->kind != NODE_TERM)
+    return NULL;
+  if (lhs->term.kind != TERM_PORT || rhs->term.kind != TERM_PORT)
+    return NULL;
+  if (lhs->term.l4_proto != rhs->term.l4_proto)
+    return NULL;
+  if (collect_ports(&lhs->term, ports, &nports) < 0)
+    return NULL;
+  if (collect_ports(&rhs->term, rports, &nrports) < 0)
+    return NULL;
+
+  for (i = 0; i < nrports; i++) {
+    seen = 0;
+    for (j = 0; j < nports; j++) {
+      if (ports[j] == rports[i]) {
+        seen = 1;
+        break;
+      }
+    }
+    if (seen)
+      continue;
+    if (nports >= 2)
+      return NULL;
+    ports[nports++] = rports[i];
+  }
+
+  term = lhs->term;
+  if (nports == 2 && ports[0] > ports[1]) {
+    unsigned short tmp;
+
+    tmp = ports[0];
+    ports[0] = ports[1];
+    ports[1] = tmp;
+  }
+  term.port = ports[0];
+  term.has_port_hi = nports == 2;
+  term.port_hi = nports == 2 ? ports[1] : 0;
+  return node_term_copy(&term);
+}
+
+static struct filter_node *normalize_proto_port(const struct filter_node *lhs,
+    const struct filter_node *rhs)
+{
+  struct filter_term term;
+
+  if (lhs->kind != NODE_TERM || rhs->kind != NODE_TERM)
+    return NULL;
+  if (rhs->term.kind != TERM_PORT || rhs->term.l4_proto)
+    return NULL;
+
+  term = rhs->term;
+  if (lhs->term.kind == TERM_TCP)
+    term.l4_proto = 6;
+  else if (lhs->term.kind == TERM_UDP)
+    term.l4_proto = 17;
+  else
+    return NULL;
+
+  return node_term_copy(&term);
+}
+
+static struct filter_node *filter_normalize_node(const struct filter_node *node)
+{
+  struct filter_node *lhs;
+  struct filter_node *rhs;
+  struct filter_node *out;
+
+  if (node->kind == NODE_TERM)
+    return node_term_copy(&node->term);
+
+  lhs = filter_normalize_node(node->expr.lhs);
+  if (!lhs)
+    return NULL;
+  rhs = filter_normalize_node(node->expr.rhs);
+  if (!rhs) {
+    filter_free_node(lhs);
+    return NULL;
+  }
+
+  if (node->kind == NODE_AND) {
+    out = normalize_proto_port(lhs, rhs);
+    if (!out)
+      out = normalize_proto_port(rhs, lhs);
+    if (out) {
+      filter_free_node(lhs);
+      filter_free_node(rhs);
+      return out;
+    }
+  }
+
+  if (node_eq(lhs, rhs)) {
+    filter_free_node(rhs);
+    return lhs;
+  }
+
+  if (node->kind == NODE_OR) {
+    out = normalize_merge_ports(lhs, rhs);
+    if (out) {
+      filter_free_node(lhs);
+      filter_free_node(rhs);
+      return out;
+    }
+  }
+
+  out = merge_expr(node->kind, lhs, rhs);
+  if (!out) {
+    filter_free_node(lhs);
+    filter_free_node(rhs);
+  }
+  return out;
+}
+
 static struct filter_node *parse_expr(struct parser *ps)
 {
   struct filter_node *lhs;
@@ -431,7 +598,14 @@ static int filter_match_node(const struct filter_node *node,
     case TERM_PORT:
       if (!pi->has_ports)
         return 0;
-      return pi->src_port == term->port || pi->dst_port == term->port;
+      if (term->l4_proto && pi->ip_proto != term->l4_proto)
+        return 0;
+      if (pi->src_port == term->port || pi->dst_port == term->port)
+        return 1;
+      if (term->has_port_hi &&
+          (pi->src_port == term->port_hi || pi->dst_port == term->port_hi))
+        return 1;
+      return 0;
     case TERM_ETHER_SRC:
       return !memcmp(pi->src_mac, term->mac, 6);
     case TERM_ETHER_DST:
@@ -457,6 +631,18 @@ static int filter_match_node(const struct filter_node *node,
 int filter_match(const struct filter *f, const struct pkt_info *pi)
 {
   return filter_match_node(f->root, pi);
+}
+
+int filter_normalize(struct filter *dst, const struct filter *src)
+{
+  memset(dst, 0, sizeof(*dst));
+  if (!src->root)
+    return 0;
+
+  dst->root = filter_normalize_node(src->root);
+  if (!dst->root)
+    return -1;
+  return 0;
 }
 
 void filter_free(struct filter *f)

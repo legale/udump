@@ -13,7 +13,10 @@ enum filter_term_kind {
 struct filter_term {
   enum filter_term_kind kind;
   unsigned short port;
+  unsigned short port_hi;
   unsigned char mac[6];
+  unsigned char has_port_hi;
+  unsigned char l4_proto;
 };
 
 enum filter_node_kind {
@@ -41,6 +44,7 @@ struct pkt_info;
 
 int filter_parse(struct filter *f, int argc, char **argv);
 int filter_match(const struct filter *f, const struct pkt_info *pi);
+int filter_normalize(struct filter *dst, const struct filter *src);
 void filter_free(struct filter *f);
 
 #endif
