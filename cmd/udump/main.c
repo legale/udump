@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "capture.h"
+
 struct opts {
   const char *ifname;
   const char *out_path;
@@ -114,6 +116,7 @@ static int parse_opts(struct opts *opts, int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+  struct capture_cfg cfg;
   struct opts opts;
 
   if (parse_opts(&opts, argc, argv) < 0) {
@@ -121,6 +124,12 @@ int main(int argc, char **argv)
     return 1;
   }
 
-  (void)opts;
-  return 0;
+  cfg.ifname = opts.ifname;
+  cfg.pkt_limit = opts.pkt_limit;
+  cfg.time_limit = opts.time_limit;
+
+  (void)opts.out_path;
+  (void)opts.filter_argc;
+  (void)opts.filter_argv;
+  return capture_run(&cfg) < 0;
 }
