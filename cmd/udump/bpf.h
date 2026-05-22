@@ -16,6 +16,6 @@ struct bpf_prog {
 
 int bpf_compile(struct bpf_prog *prog, const struct filter *f);
 void bpf_prog_free(struct bpf_prog *prog);
-struct sock_fprog bpf_sock_fprog(struct bpf_prog *prog);
+struct sock_fprog bpf_sock_fprog(const struct bpf_prog *prog);
 
 #endif

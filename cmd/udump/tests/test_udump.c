@@ -1,8 +1,10 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -157,24 +159,132 @@ static int match_fail(int argc, char **argv, struct pkt_info *pi)
   return !match_ok(argc, argv, pi);
 }
 
+static int compile_filter(struct filter *f, struct bpf_prog *prog, int argc,
+    char **argv)
+{
+  if (filter_parse(f, argc, argv) < 0)
+    return -1;
+  if (bpf_compile(prog, f) < 0) {
+    filter_free(f);
+    return -1;
+  }
+  return 0;
+}
+
 static int bpf_compile_ok(int argc, char **argv)
 {
+  struct sock_fprog fprog;
   struct bpf_prog prog;
   struct filter f;
   int ok;
 
-  if (filter_parse(&f, argc, argv) < 0)
+  if (compile_filter(&f, &prog, argc, argv) < 0)
     return 0;
 
-  ok = bpf_compile(&prog, &f) == 0;
-  if (ok) {
-    if (!prog.len)
-      ok = 0;
-    else if (prog.insns[prog.len - 1].code != (BPF_RET | BPF_K))
-      ok = 0;
+  fprog = bpf_sock_fprog(&prog);
+  ok = prog.len >= 2;
+  if (ok && fprog.len != prog.len)
+    ok = 0;
+  if (ok && prog.insns[prog.len - 2].code != (BPF_RET | BPF_K))
+    ok = 0;
+  if (ok && prog.insns[prog.len - 2].k != 65535u)
+    ok = 0;
+  if (ok && prog.insns[prog.len - 1].code != (BPF_RET | BPF_K))
+    ok = 0;
+  if (ok && prog.insns[prog.len - 1].k != 0)
+    ok = 0;
+
+  bpf_prog_free(&prog);
+  filter_free(&f);
+  return ok;
+}
+
+static int userspace_match_raw(const struct filter *f, const void *buf,
+    unsigned int len)
+{
+  struct pkt_info pi;
+
+  if (packet_parse(&pi, buf, len) < 0)
+    return 0;
+  return filter_match(f, &pi);
+}
+
+static int kernel_match_raw(const struct bpf_prog *prog, const void *buf,
+    unsigned int len, int *match)
+{
+  unsigned char rx[65536];
+  struct sock_fprog fprog;
+  struct pollfd pfd;
+  int sv[2];
+  ssize_t n;
+  int rc;
+
+  sv[0] = -1;
+  sv[1] = -1;
+  *match = 0;
+
+  if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) < 0)
+    return -1;
+
+  fprog = bpf_sock_fprog(prog);
+  if (setsockopt(sv[1], SOL_SOCKET, SO_ATTACH_FILTER,
+      &fprog, sizeof(fprog)) < 0)
+    goto err;
+
+  n = send(sv[0], buf, len, 0);
+  if (n != (ssize_t)len)
+    goto err;
+
+  pfd.fd = sv[1];
+  pfd.events = POLLIN;
+  pfd.revents = 0;
+
+  rc = poll(&pfd, 1, 100);
+  if (rc < 0)
+    goto err;
+  if (!rc)
+    goto out;
+
+  n = recv(sv[1], rx, sizeof(rx), 0);
+  if (n < 0)
+    goto err;
+
+  *match = 1;
+
+out:
+  close(sv[0]);
+  close(sv[1]);
+  return 0;
+
+err:
+  if (sv[0] >= 0)
+    close(sv[0]);
+  if (sv[1] >= 0)
+    close(sv[1]);
+  return -1;
+}
+
+static int bpf_case_ok(int argc, char **argv, const unsigned char *pkt,
+    unsigned int len, int expect)
+{
+  struct bpf_prog prog;
+  struct filter f;
+  int user_match;
+  int kern_match;
+  int ok;
+
+  if (compile_filter(&f, &prog, argc, argv) < 0)
+    return 0;
+
+  user_match = userspace_match_raw(&f, pkt, len);
+  if (kernel_match_raw(&prog, pkt, len, &kern_match) < 0) {
     bpf_prog_free(&prog);
+    filter_free(&f);
+    return 0;
   }
 
+  ok = user_match == expect && kern_match == expect && user_match == kern_match;
+  bpf_prog_free(&prog);
   filter_free(&f);
   return ok;
 }
@@ -260,6 +370,80 @@ static void test_bpf_compile_l4(void)
     fail("test_bpf_compile_l4", "port bpf compile failed");
   if (!bpf_compile_ok(3, combo))
     fail("test_bpf_compile_l4", "tcp port bpf compile failed");
+}
+
+static void test_bpf_kernel_parity_crafted(void)
+{
+  unsigned char tcp_pkt[54] = {
+    0x10, 0x20, 0x30, 0x40, 0x50, 0x60,
+    0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+    0x08, 0x00,
+    0x45, 0x00, 0x00, 0x28,
+    0x00, 0x00, 0x00, 0x00,
+    0x40, 0x06, 0x00, 0x00,
+    127, 0, 0, 1,
+    127, 0, 0, 1,
+    0x30, 0x39, 0x00, 0x16,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0x50, 0x00, 0, 0,
+    0, 0, 0, 0
+  };
+  unsigned char udp_pkt[42] = {
+    0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
+    0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+    0x08, 0x00,
+    0x45, 0x00, 0x00, 0x1c,
+    0x00, 0x00, 0x00, 0x00,
+    0x40, 0x11, 0x00, 0x00,
+    127, 0, 0, 1,
+    127, 0, 0, 1,
+    0x00, 0x35, 0x1f, 0x90,
+    0x00, 0x08, 0x00, 0x00
+  };
+  unsigned char arp_pkt[14] = {
+    0x10, 0x20, 0x30, 0x40, 0x50, 0x60,
+    0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+    0x08, 0x06
+  };
+  unsigned char trunc_pkt[24] = {
+    0x10, 0x20, 0x30, 0x40, 0x50, 0x60,
+    0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+    0x08, 0x00,
+    0x45, 0x00, 0x00, 0x28,
+    0x00, 0x00, 0x00, 0x00,
+    0x40, 0x06
+  };
+
+  if (!bpf_case_ok(1, (char *[]){"tcp"}, tcp_pkt, sizeof(tcp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "tcp packet mismatch");
+  if (!bpf_case_ok(1, (char *[]){"udp"}, tcp_pkt, sizeof(tcp_pkt), 0))
+    fail("test_bpf_kernel_parity_crafted", "tcp/udp mismatch");
+  if (!bpf_case_ok(1, (char *[]){"udp"}, udp_pkt, sizeof(udp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "udp packet mismatch");
+  if (!bpf_case_ok(2, (char *[]){"port", "22"}, tcp_pkt, sizeof(tcp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "port 22 mismatch");
+  if (!bpf_case_ok(2, (char *[]){"port", "53"}, udp_pkt, sizeof(udp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "port 53 mismatch");
+  if (!bpf_case_ok(3, (char *[]){"ether", "src", "aa:bb:cc:dd:ee:ff"},
+      tcp_pkt, sizeof(tcp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "ether src mismatch");
+  if (!bpf_case_ok(3, (char *[]){"ether", "dst", "10:20:30:40:50:60"},
+      tcp_pkt, sizeof(tcp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "ether dst mismatch");
+  if (!bpf_case_ok(3, (char *[]){"ether", "host", "10:20:30:40:50:60"},
+      tcp_pkt, sizeof(tcp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "ether host mismatch");
+  if (!bpf_case_ok(3, (char *[]){"ether", "dst", "66:55:44:33:22:11"},
+      tcp_pkt, sizeof(tcp_pkt), 0))
+    fail("test_bpf_kernel_parity_crafted", "ether dst negative mismatch");
+  if (!bpf_case_ok(3, (char *[]){"tcp", "port", "22"},
+      tcp_pkt, sizeof(tcp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "tcp port 22 mismatch");
+  if (!bpf_case_ok(1, (char *[]){"tcp"}, arp_pkt, sizeof(arp_pkt), 0))
+    fail("test_bpf_kernel_parity_crafted", "arp/tcp mismatch");
+  if (!bpf_case_ok(1, (char *[]){"tcp"}, trunc_pkt, sizeof(trunc_pkt), 0))
+    fail("test_bpf_kernel_parity_crafted", "truncated ipv4 mismatch");
 }
 
 static void test_packet_parse(void)
@@ -400,15 +584,72 @@ static void test_fixture_tcp_port_22(void)
   fclose(fp);
 }
 
+static void test_bpf_fixture_parity(void)
+{
+  unsigned char buf[65536];
+  struct bpf_prog prog;
+  struct filter f;
+  unsigned int caplen;
+  int user_match;
+  int kern_match;
+  int rc;
+  FILE *fp;
+
+  fp = fopen(FIXTURE_PATH, "rb");
+  if (!fp) {
+    fail("test_bpf_fixture_parity", "fixture open failed");
+    return;
+  }
+
+  if (fseek(fp, 24, SEEK_SET) < 0) {
+    fail("test_bpf_fixture_parity", "fixture seek failed");
+    fclose(fp);
+    return;
+  }
+
+  if (compile_filter(&f, &prog, 3, (char *[]){"tcp", "port", "22"}) < 0) {
+    fail("test_bpf_fixture_parity", "filter compile failed");
+    fclose(fp);
+    return;
+  }
+
+  for (;;) {
+    rc = next_pcap_record(fp, buf, sizeof(buf), &caplen);
+    if (rc == 0)
+      break;
+    if (rc < 0) {
+      fail("test_bpf_fixture_parity", "pcap record read failed");
+      break;
+    }
+
+    user_match = userspace_match_raw(&f, buf, caplen);
+    if (kernel_match_raw(&prog, buf, caplen, &kern_match) < 0) {
+      fail("test_bpf_fixture_parity", "kernel match failed");
+      break;
+    }
+
+    if (user_match != kern_match) {
+      fail("test_bpf_fixture_parity", "kernel/user mismatch on fixture");
+      break;
+    }
+  }
+
+  bpf_prog_free(&prog);
+  filter_free(&f);
+  fclose(fp);
+}
+
 int main(void)
 {
   test_filter_parse();
   test_filter_match();
   test_bpf_compile_ether();
   test_bpf_compile_l4();
+  test_bpf_kernel_parity_crafted();
   test_packet_parse();
   test_pcap_writer();
   test_fixture_tcp_port_22();
+  test_bpf_fixture_parity();
 
   if (failures)
     return 1;
