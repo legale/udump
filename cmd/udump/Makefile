@@ -10,6 +10,8 @@ SAN_CFLAGS ?= -O1 -g -Wall -Wextra
 
 BIN = udump
 OBJS = main.o capture.o pcap.o packet.o filter.o
+TEST_BIN = tests/test_udump
+TEST_OBJS = tests/test_udump.o filter.o packet.o pcap.o
 
 all: $(BIN)
 
@@ -21,11 +23,15 @@ $(BIN): $(OBJS)
 
 static: all
 
-test:
-> @:
+test: $(TEST_BIN)
+> ./$(TEST_BIN)
+
+$(TEST_BIN): $(TEST_OBJS)
+> $(CC) $(LDFLAGS) -o $@ $(TEST_OBJS)
 
 clean:
-> rm -f udump *.o
+> rm -f udump *.o tests/*.o $(TEST_BIN)
 
 san: clean
 > $(MAKE) CC="$(SAN_CC)" CFLAGS="$(SAN_CFLAGS)" LDFLAGS="" all
+> $(MAKE) CC="$(SAN_CC)" CFLAGS="$(SAN_CFLAGS)" LDFLAGS="" test

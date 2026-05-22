@@ -1,3 +1,4 @@
+#include <arpa/inet.h>
 #include <errno.h>
 #include <limits.h>
 #include <linux/if_ether.h>
