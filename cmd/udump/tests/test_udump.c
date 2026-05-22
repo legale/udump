@@ -845,6 +845,52 @@ static void test_bpf_fixture_or_parity(void)
   fclose(fp);
 }
 
+static void test_bpf_dump_format(void)
+{
+  char *argv[] = { "udp", "port", "67", "or", "udp", "port", "68" };
+  struct bpf_prog prog;
+  struct filter f;
+  char buf[8192];
+  size_t n;
+  FILE *fp;
+
+  if (compile_filter(&f, &prog, 7, argv) < 0) {
+    fail("test_bpf_dump_format", "filter compile failed");
+    return;
+  }
+
+  fp = tmpfile();
+  if (!fp) {
+    fail("test_bpf_dump_format", "tmpfile failed");
+    bpf_prog_free(&prog);
+    filter_free(&f);
+    return;
+  }
+
+  bpf_dump(fp, &prog);
+  if (fseek(fp, 0, SEEK_SET) < 0) {
+    fail("test_bpf_dump_format", "rewind failed");
+    fclose(fp);
+    bpf_prog_free(&prog);
+    filter_free(&f);
+    return;
+  }
+
+  n = fread(buf, 1, sizeof(buf) - 1, fp);
+  buf[n] = '\0';
+
+  if (!strstr(buf, "(000) ldh      [12]"))
+    fail("test_bpf_dump_format", "missing ldh line");
+  if (!strstr(buf, "jeq      #0x86dd"))
+    fail("test_bpf_dump_format", "missing jeq line");
+  if (!strstr(buf, "ret      #262144"))
+    fail("test_bpf_dump_format", "missing accept ret");
+
+  fclose(fp);
+  bpf_prog_free(&prog);
+  filter_free(&f);
+}
+
 int main(void)
 {
   test_filter_parse();
@@ -858,6 +904,7 @@ int main(void)
   test_fixture_tcp_port_22();
   test_bpf_fixture_parity();
   test_bpf_fixture_or_parity();
+  test_bpf_dump_format();
 
   if (failures)
     return 1;

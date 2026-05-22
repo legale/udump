@@ -765,6 +765,53 @@ err:
   return -1;
 }
 
+void bpf_dump(FILE *out, const struct bpf_prog *prog)
+{
+  const struct sock_filter *insn;
+  unsigned int jt;
+  unsigned int jf;
+  unsigned short i;
+
+  for (i = 0; i < prog->len; i++) {
+    insn = &prog->insns[i];
+    jt = (unsigned int)i + 1u + insn->jt;
+    jf = (unsigned int)i + 1u + insn->jf;
+
+    switch (insn->code) {
+    case BPF_LD | BPF_W | BPF_ABS:
+      fprintf(out, "(%03u) ld       [%u]\n", i, insn->k);
+      break;
+    case BPF_LD | BPF_H | BPF_ABS:
+      fprintf(out, "(%03u) ldh      [%u]\n", i, insn->k);
+      break;
+    case BPF_LD | BPF_B | BPF_ABS:
+      fprintf(out, "(%03u) ldb      [%u]\n", i, insn->k);
+      break;
+    case BPF_LD | BPF_H | BPF_IND:
+      fprintf(out, "(%03u) ldh      [x + %u]\n", i, insn->k);
+      break;
+    case BPF_LDX | BPF_MSH | BPF_B:
+      fprintf(out, "(%03u) ldxb     4*([%u]&0xf)\n", i, insn->k);
+      break;
+    case BPF_JMP | BPF_JEQ | BPF_K:
+      fprintf(out, "(%03u) jeq      #0x%x          jt %u\tjf %u\n",
+          i, insn->k, jt, jf);
+      break;
+    case BPF_JMP | BPF_JSET | BPF_K:
+      fprintf(out, "(%03u) jset     #0x%x          jt %u\tjf %u\n",
+          i, insn->k, jt, jf);
+      break;
+    case BPF_RET | BPF_K:
+      fprintf(out, "(%03u) ret      #%u\n", i, insn->k);
+      break;
+    default:
+      fprintf(out, "(%03u) code 0x%x          jt %u\tjf %u\tk %u\n",
+          i, insn->code, jt, jf, insn->k);
+      break;
+    }
+  }
+}
+
 void bpf_prog_free(struct bpf_prog *prog)
 {
   bpf_prog_reset(prog);
