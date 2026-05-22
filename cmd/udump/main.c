@@ -11,6 +11,7 @@
 struct opts {
   const char *ifname;
   const char *out_path;
+  enum filter_mode filter_mode;
   unsigned long long pkt_limit;
   unsigned int time_limit;
   int filter_argc;
@@ -21,6 +22,7 @@ static void usage(FILE *out, const char *prog)
 {
   fprintf(out,
       "usage: %s -i <ifname> -w <output_file> [-c <count>] [-G <seconds>] "
+      "[--filter-mode <bpf|user>] "
       "[filter ...]\n",
       prog);
 }
@@ -57,13 +59,36 @@ static int parse_ull(const char *name, const char *arg, unsigned long long *out)
   return 0;
 }
 
+static int parse_filter_mode(const char *arg, enum filter_mode *mode)
+{
+  if (!strcmp(arg, "bpf")) {
+    *mode = FILTER_MODE_BPF;
+    return 0;
+  }
+
+  if (!strcmp(arg, "user")) {
+    *mode = FILTER_MODE_USER;
+    return 0;
+  }
+
+  fprintf(stderr, "invalid filter mode: %s\n", arg);
+  return -1;
+}
+
 static int parse_opts(struct opts *opts, int argc, char **argv)
 {
+  static const struct option long_opts[] = {
+    { "filter-mode", required_argument, NULL, 1 },
+    { NULL, 0, NULL, 0 },
+  };
+  int have_filter_mode;
   int c;
 
   memset(opts, 0, sizeof(*opts));
+  opts->filter_mode = FILTER_MODE_BPF;
+  have_filter_mode = 0;
 
-  while ((c = getopt(argc, argv, "c:G:i:w:")) != -1) {
+  while ((c = getopt_long(argc, argv, "c:G:i:w:", long_opts, NULL)) != -1) {
     switch (c) {
     case 'c':
       if (opts->pkt_limit) {
@@ -94,6 +119,15 @@ static int parse_opts(struct opts *opts, int argc, char **argv)
         return -1;
       }
       opts->out_path = optarg;
+      break;
+    case 1:
+      if (have_filter_mode) {
+        fprintf(stderr, "duplicate --filter-mode option\n");
+        return -1;
+      }
+      if (parse_filter_mode(optarg, &opts->filter_mode) < 0)
+        return -1;
+      have_filter_mode = 1;
       break;
     default:
       return -1;
@@ -133,6 +167,7 @@ int main(int argc, char **argv)
   cfg.ifname = opts.ifname;
   cfg.out_path = opts.out_path;
   cfg.filter = &flt;
+  cfg.filter_mode = opts.filter_mode;
   cfg.pkt_limit = opts.pkt_limit;
   cfg.time_limit = opts.time_limit;
 

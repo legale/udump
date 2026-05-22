@@ -144,7 +144,8 @@ int capture_run(const struct capture_cfg *cfg)
     return -1;
   }
 
-  if (attach_bpf(fd, cfg->filter) < 0) {
+  if (cfg->filter_mode == FILTER_MODE_BPF &&
+      attach_bpf(fd, cfg->filter) < 0) {
     close(fd);
     pcap_close(&pw);
     return -1;
@@ -182,7 +183,8 @@ int capture_run(const struct capture_cfg *cfg)
       return -1;
     }
 
-    if (cfg->filter && cfg->filter->nterms) {
+    if (cfg->filter_mode == FILTER_MODE_USER &&
+        cfg->filter && cfg->filter->nterms) {
       if (packet_parse(&pi, buf, (unsigned int)len) < 0)
         continue;
       if (!filter_match(cfg->filter, &pi))
