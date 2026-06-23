@@ -373,6 +373,8 @@ static void test_filter_match(void)
 {
   struct pkt_info pi;
   struct pkt_info pi6;
+  struct pkt_info pi_bad;
+  struct pkt_info pi6_bad;
   char *tcp[] = { "tcp" };
   char *udp[] = { "udp" };
   char *port22[] = { "port", "22" };
@@ -417,6 +419,54 @@ static void test_filter_match(void)
   pi6.dst_ip[15] = 0x02;
   pi6.dst_ip_len = 16;
 
+  memset(&pi_bad, 0, sizeof(pi_bad));
+  pi_bad.is_ipv4 = 1;
+  pi_bad.ip_proto = 6;
+  pi_bad.has_ports = 1;
+  pi_bad.src_port = 22;
+  pi_bad.dst_port = 40000;
+  pi_bad.src_ip[0] = 10;
+  pi_bad.src_ip[1] = 1;
+  pi_bad.src_ip[2] = 2;
+  pi_bad.src_ip[3] = 4;
+  pi_bad.src_ip_len = 4;
+  pi_bad.dst_ip[0] = 192;
+  pi_bad.dst_ip[1] = 168;
+  pi_bad.dst_ip[2] = 1;
+  pi_bad.dst_ip[3] = 2;
+  pi_bad.dst_ip_len = 4;
+  pi_bad.src_mac[0] = 0xaa;
+  pi_bad.src_mac[1] = 0xbb;
+  pi_bad.src_mac[2] = 0xcc;
+  pi_bad.src_mac[3] = 0xdd;
+  pi_bad.src_mac[4] = 0xee;
+  pi_bad.src_mac[5] = 0xfe;
+  pi_bad.dst_mac[0] = 0x10;
+  pi_bad.dst_mac[1] = 0x20;
+  pi_bad.dst_mac[2] = 0x30;
+  pi_bad.dst_mac[3] = 0x40;
+  pi_bad.dst_mac[4] = 0x50;
+  pi_bad.dst_mac[5] = 0x61;
+
+  memset(&pi6_bad, 0, sizeof(pi6_bad));
+  pi6_bad.is_ipv6 = 1;
+  pi6_bad.ip_proto = 17;
+  pi6_bad.has_ports = 1;
+  pi6_bad.src_port = 67;
+  pi6_bad.dst_port = 68;
+  pi6_bad.src_ip[0] = 0x20;
+  pi6_bad.src_ip[1] = 0x01;
+  pi6_bad.src_ip[2] = 0x0d;
+  pi6_bad.src_ip[3] = 0xb8;
+  pi6_bad.src_ip[15] = 0x03;
+  pi6_bad.src_ip_len = 16;
+  pi6_bad.dst_ip[0] = 0x20;
+  pi6_bad.dst_ip[1] = 0x01;
+  pi6_bad.dst_ip[2] = 0x0d;
+  pi6_bad.dst_ip[3] = 0xb8;
+  pi6_bad.dst_ip[15] = 0x04;
+  pi6_bad.dst_ip_len = 16;
+
   if (!match_ok(1, tcp, &pi))
     fail("test_filter_match", "tcp did not match");
   if (!match_fail(1, udp, &pi))
@@ -433,16 +483,28 @@ static void test_filter_match(void)
     fail("test_filter_match", "ether host did not match");
   if (!match_ok(2, ip_host, &pi))
     fail("test_filter_match", "ip host did not match");
+  if (!match_fail(2, ip_host, &pi_bad))
+    fail("test_filter_match", "ip host false-positive");
   if (!match_ok(3, ip_src_host, &pi))
     fail("test_filter_match", "ip src host did not match");
+  if (!match_fail(3, ip_src_host, &pi_bad))
+    fail("test_filter_match", "ip src host false-positive");
   if (!match_ok(3, ip_dst_host, &pi))
     fail("test_filter_match", "ip dst host did not match");
+  if (!match_fail(3, ip_dst_host, &pi_bad))
+    fail("test_filter_match", "ip dst host false-positive");
   if (!match_ok(2, ip6_host, &pi6))
     fail("test_filter_match", "ip6 host did not match");
+  if (!match_fail(2, ip6_host, &pi6_bad))
+    fail("test_filter_match", "ip6 host false-positive");
   if (!match_ok(3, ip6_src_host, &pi6))
     fail("test_filter_match", "ip6 src host did not match");
+  if (!match_fail(3, ip6_src_host, &pi6_bad))
+    fail("test_filter_match", "ip6 src host false-positive");
   if (!match_ok(3, ip6_dst_host, &pi6))
     fail("test_filter_match", "ip6 dst host did not match");
+  if (!match_fail(3, ip6_dst_host, &pi6_bad))
+    fail("test_filter_match", "ip6 dst host false-positive");
   if (!match_ok(6, combo, &pi))
     fail("test_filter_match", "combined filter did not match");
   if (!match_ok(7, or_match, &pi))
@@ -590,12 +652,21 @@ static void test_bpf_kernel_parity_crafted(void)
   if (!bpf_case_ok(2, (char *[]){"host", "127.0.0.1"},
       tcp_pkt, sizeof(tcp_pkt), 1))
     fail("test_bpf_kernel_parity_crafted", "host mismatch");
+  if (!bpf_case_ok(2, (char *[]){"host", "127.0.0.2"},
+      tcp_pkt, sizeof(tcp_pkt), 0))
+    fail("test_bpf_kernel_parity_crafted", "host false-positive");
   if (!bpf_case_ok(3, (char *[]){"src", "host", "127.0.0.1"},
       tcp_pkt, sizeof(tcp_pkt), 1))
     fail("test_bpf_kernel_parity_crafted", "src host mismatch");
+  if (!bpf_case_ok(3, (char *[]){"src", "host", "127.0.0.2"},
+      tcp_pkt, sizeof(tcp_pkt), 0))
+    fail("test_bpf_kernel_parity_crafted", "src host false-positive");
   if (!bpf_case_ok(3, (char *[]){"dst", "host", "127.0.0.1"},
       tcp_pkt, sizeof(tcp_pkt), 1))
     fail("test_bpf_kernel_parity_crafted", "dst host mismatch");
+  if (!bpf_case_ok(3, (char *[]){"dst", "host", "127.0.0.2"},
+      tcp_pkt, sizeof(tcp_pkt), 0))
+    fail("test_bpf_kernel_parity_crafted", "dst host false-positive");
   if (!bpf_case_ok(3, (char *[]){"ether", "dst", "66:55:44:33:22:11"},
       tcp_pkt, sizeof(tcp_pkt), 0))
     fail("test_bpf_kernel_parity_crafted", "ether dst negative mismatch");
