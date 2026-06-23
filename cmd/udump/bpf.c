@@ -273,6 +273,14 @@ static unsigned int mac_half(const unsigned char *mac, int off)
       (unsigned int)mac[off + 1];
 }
 
+static unsigned int ip_word(const unsigned char *ip, int off)
+{
+  return ((unsigned int)ip[off + 0] << 24) |
+      ((unsigned int)ip[off + 1] << 16) |
+      ((unsigned int)ip[off + 2] << 8) |
+      (unsigned int)ip[off + 3];
+}
+
 static int compile_mac_eq(struct bpf_prog *prog, unsigned int off,
     const unsigned char *mac, struct bpf_block *out)
 {
@@ -289,6 +297,106 @@ static int compile_mac_eq(struct bpf_prog *prog, unsigned int off,
   if (block_and(prog, &lhs, &rhs, out) < 0) {
     block_free(&lhs);
     block_free(&rhs);
+    return -1;
+  }
+  return 0;
+}
+
+static int compile_ip_eq(struct bpf_prog *prog, unsigned int off,
+    const unsigned char *ip, unsigned char ip_len, struct bpf_block *out)
+{
+  struct bpf_block lhs;
+  struct bpf_block rhs;
+  struct bpf_block tmp1;
+  struct bpf_block tmp2;
+
+  if (ip_len == 4)
+    return block_test_abs(prog, BPF_W, off, BPF_JEQ, ip_word(ip, 0), 1, out);
+
+  if (ip_len != 16) {
+    fprintf(stderr, "bpf compiler: bad ip length: %u\n", ip_len);
+    return -1;
+  }
+
+  if (block_test_abs(prog, BPF_W, off + 0, BPF_JEQ, ip_word(ip, 0), 1,
+      &lhs) < 0)
+    return -1;
+  if (block_test_abs(prog, BPF_W, off + 4, BPF_JEQ, ip_word(ip, 4), 1,
+      &rhs) < 0) {
+    block_free(&lhs);
+    return -1;
+  }
+  if (block_and(prog, &lhs, &rhs, &tmp1) < 0) {
+    block_free(&lhs);
+    block_free(&rhs);
+    return -1;
+  }
+  if (block_test_abs(prog, BPF_W, off + 8, BPF_JEQ, ip_word(ip, 8), 1,
+      &lhs) < 0) {
+    block_free(&tmp1);
+    block_free(&lhs);
+    block_free(&rhs);
+    return -1;
+  }
+  if (block_test_abs(prog, BPF_W, off + 12, BPF_JEQ, ip_word(ip, 12), 1,
+      &rhs) < 0) {
+    block_free(&tmp1);
+    block_free(&lhs);
+    block_free(&rhs);
+    return -1;
+  }
+  if (block_and(prog, &lhs, &rhs, &tmp2) < 0) {
+    block_free(&tmp1);
+    block_free(&lhs);
+    block_free(&rhs);
+    return -1;
+  }
+  if (block_and(prog, &tmp1, &tmp2, out) < 0) {
+    block_free(&tmp1);
+    block_free(&tmp2);
+    block_free(&lhs);
+    block_free(&rhs);
+    return -1;
+  }
+
+  return 0;
+}
+
+static int compile_ipv4_host_addr(struct bpf_prog *prog,
+    const struct filter_term *term, unsigned int off, struct bpf_block *out)
+{
+  struct bpf_block eth;
+  struct bpf_block cmp;
+
+  if (block_test_abs(prog, BPF_H, 12, BPF_JEQ, 0x0800, 1, &eth) < 0)
+    return -1;
+  if (compile_ip_eq(prog, off, term->ip, term->ip_len, &cmp) < 0) {
+    block_free(&eth);
+    return -1;
+  }
+  if (block_and(prog, &eth, &cmp, out) < 0) {
+    block_free(&eth);
+    block_free(&cmp);
+    return -1;
+  }
+  return 0;
+}
+
+static int compile_ipv6_host_addr(struct bpf_prog *prog,
+    const struct filter_term *term, unsigned int off, struct bpf_block *out)
+{
+  struct bpf_block eth;
+  struct bpf_block cmp;
+
+  if (block_test_abs(prog, BPF_H, 12, BPF_JEQ, 0x86dd, 1, &eth) < 0)
+    return -1;
+  if (compile_ip_eq(prog, off, term->ip, term->ip_len, &cmp) < 0) {
+    block_free(&eth);
+    return -1;
+  }
+  if (block_and(prog, &eth, &cmp, out) < 0) {
+    block_free(&eth);
+    block_free(&cmp);
     return -1;
   }
   return 0;
@@ -677,6 +785,45 @@ static int compile_term_block(struct bpf_prog *prog,
       return -1;
     }
     return 0;
+  case TERM_HOST:
+    if (term->ip_len == 4) {
+      if (term->ip_dir == HOST_DIR_SRC)
+        return compile_ipv4_host_addr(prog, term, 26, out);
+      if (term->ip_dir == HOST_DIR_DST)
+        return compile_ipv4_host_addr(prog, term, 30, out);
+      if (compile_ipv4_host_addr(prog, term, 26, &lhs) < 0)
+        return -1;
+      if (compile_ipv4_host_addr(prog, term, 30, &rhs) < 0) {
+        block_free(&lhs);
+        return -1;
+      }
+      if (block_or(prog, &lhs, &rhs, out) < 0) {
+        block_free(&lhs);
+        block_free(&rhs);
+        return -1;
+      }
+      return 0;
+    }
+    if (term->ip_len == 16) {
+      if (term->ip_dir == HOST_DIR_SRC)
+        return compile_ipv6_host_addr(prog, term, 22, out);
+      if (term->ip_dir == HOST_DIR_DST)
+        return compile_ipv6_host_addr(prog, term, 38, out);
+      if (compile_ipv6_host_addr(prog, term, 22, &lhs) < 0)
+        return -1;
+      if (compile_ipv6_host_addr(prog, term, 38, &rhs) < 0) {
+        block_free(&lhs);
+        return -1;
+      }
+      if (block_or(prog, &lhs, &rhs, out) < 0) {
+        block_free(&lhs);
+        block_free(&rhs);
+        return -1;
+      }
+      return 0;
+    }
+    fprintf(stderr, "bpf compiler: bad host length: %u\n", term->ip_len);
+    return -1;
   }
 
   fprintf(stderr, "bpf compiler: unsupported term kind: %d\n", term->kind);
