@@ -1,0 +1,5 @@
+*.o
+/udump
+/tests/test_udump
+/cmd/udump/*.o
+/cmd/udump/udump

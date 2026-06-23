@@ -15,7 +15,7 @@ make
 Result:
 
 ```text
-cmd/udump/udump
+./udump
 ```
 
 Sanitizer build:
@@ -27,21 +27,21 @@ make san
 ## Usage
 
 ```sh
-./cmd/udump/udump [-d] [-i <ifname> -w <output_file>] [-c <count>] [-G <seconds>] \
+./udump [-d] [-i <ifname> -w <output_file>] [-c <count>] [-G <seconds>] \
   [--filter-mode <bpf|user>] [filter...]
 ```
 
 Examples:
 
 ```sh
-./cmd/udump/udump -i br-eth0 -w out.pcap
-./cmd/udump/udump -i br-eth0 -w ssh.pcap -c 10 tcp port 22
-./cmd/udump/udump -i br-eth0 -w short.pcap -G 5 udp
-./cmd/udump/udump -i br-eth0 -w host.pcap ether host aa:bb:cc:dd:ee:ff
-./cmd/udump/udump -i br-eth0 -w ip-host.pcap host 192.168.1.1
-./cmd/udump/udump -i br-eth0 -w debug-user.pcap --filter-mode user tcp port 22
-./cmd/udump/udump -d udp port 67 or udp port 68
-./cmd/udump/udump -d \( tcp or udp \) and port 53
+./udump -i br-eth0 -w out.pcap
+./udump -i br-eth0 -w ssh.pcap -c 10 tcp port 22
+./udump -i br-eth0 -w short.pcap -G 5 udp
+./udump -i br-eth0 -w host.pcap ether host aa:bb:cc:dd:ee:ff
+./udump -i br-eth0 -w ip-host.pcap host 192.168.1.1
+./udump -i br-eth0 -w debug-user.pcap --filter-mode user tcp port 22
+./udump -d udp port 67 or udp port 68
+./udump -d \( tcp or udp \) and port 53
 ```
 
 Options:
@@ -131,4 +131,4 @@ The test suite includes:
 - BPF disassembly smoke test for `-d`
 - `pcap` writer smoke test
 - offline fixture check against
-  `cmd/udump/tests/fixtures/br-eth0-30-tcp-port-22-host-172.16.133.8.pcap`
+  `tests/fixtures/br-eth0-30-tcp-port-22-host-172.16.133.8.pcap`
