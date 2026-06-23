@@ -5,15 +5,25 @@ enum filter_term_kind {
   TERM_TCP,
   TERM_UDP,
   TERM_PORT,
+  TERM_HOST,
   TERM_ETHER_SRC,
   TERM_ETHER_DST,
   TERM_ETHER_HOST,
+};
+
+enum filter_host_dir {
+  HOST_DIR_ANY,
+  HOST_DIR_SRC,
+  HOST_DIR_DST,
 };
 
 struct filter_term {
   enum filter_term_kind kind;
   unsigned short port;
   unsigned short port_hi;
+  unsigned char ip[16];
+  unsigned char ip_len;
+  unsigned char ip_dir;
   unsigned char mac[6];
   unsigned char has_port_hi;
   unsigned char l4_proto;

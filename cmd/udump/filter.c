@@ -1,3 +1,4 @@
+#include <arpa/inet.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,6 +56,27 @@ static int parse_port(const char *arg, unsigned short *port)
 
   *port = (unsigned short)val;
   return 0;
+}
+
+static int parse_ip(const char *arg, unsigned char *ip, unsigned char *len)
+{
+  struct in_addr a4;
+  struct in6_addr a6;
+
+  if (inet_pton(AF_INET, arg, &a4) == 1) {
+    memcpy(ip, &a4, sizeof(a4));
+    *len = sizeof(a4);
+    return 0;
+  }
+
+  if (inet_pton(AF_INET6, arg, &a6) == 1) {
+    memcpy(ip, &a6, sizeof(a6));
+    *len = sizeof(a6);
+    return 0;
+  }
+
+  fprintf(stderr, "invalid ip: %s\n", arg);
+  return -1;
 }
 
 static int need_more(const char *what)
@@ -181,6 +203,12 @@ static int is_term_start(const char *tok)
     return 1;
   if (!strcmp(tok, "port"))
     return 1;
+  if (!strcmp(tok, "host"))
+    return 1;
+  if (!strcmp(tok, "src"))
+    return 1;
+  if (!strcmp(tok, "dst"))
+    return 1;
   if (!strcmp(tok, "ether"))
     return 1;
   return 0;
@@ -260,6 +288,37 @@ static struct filter_node *parse_ether_atom(struct parser *ps)
   return node;
 }
 
+static struct filter_node *parse_host_atom(struct parser *ps,
+    enum filter_host_dir dir)
+{
+  struct filter_node *node;
+  const char *tok;
+
+  tok = parser_next(ps);
+  if (!tok || strcmp(tok, "host")) {
+    fprintf(stderr, "internal parser error near host\n");
+    return NULL;
+  }
+
+  tok = parser_next(ps);
+  if (!tok) {
+    need_more("host address");
+    return NULL;
+  }
+
+  node = node_term(TERM_HOST);
+  if (!node)
+    return NULL;
+
+  node->term.ip_dir = (unsigned char)dir;
+  if (parse_ip(tok, node->term.ip, &node->term.ip_len) < 0) {
+    free(node);
+    return NULL;
+  }
+
+  return node;
+}
+
 static struct filter_node *parse_proto_atom(struct parser *ps, const char *tok)
 {
   struct filter_node *proto;
@@ -331,6 +390,24 @@ static struct filter_node *parse_term(struct parser *ps)
     return parse_proto_atom(ps, tok);
   if (!strcmp(tok, "port"))
     return parse_port_atom(ps);
+  if (!strcmp(tok, "host"))
+    return parse_host_atom(ps, HOST_DIR_ANY);
+  if (!strcmp(tok, "src")) {
+    parser_next(ps);
+    if (!parser_peek(ps) || strcmp(parser_peek(ps), "host")) {
+      fprintf(stderr, "unexpected token: src\n");
+      return NULL;
+    }
+    return parse_host_atom(ps, HOST_DIR_SRC);
+  }
+  if (!strcmp(tok, "dst")) {
+    parser_next(ps);
+    if (!parser_peek(ps) || strcmp(parser_peek(ps), "host")) {
+      fprintf(stderr, "unexpected token: dst\n");
+      return NULL;
+    }
+    return parse_host_atom(ps, HOST_DIR_DST);
+  }
   if (!strcmp(tok, "ether"))
     return parse_ether_atom(ps);
   if (!strcmp(tok, "and") || !strcmp(tok, "or") || !strcmp(tok, ")")) {
@@ -606,6 +683,30 @@ static int filter_match_node(const struct filter_node *node,
           (pi->src_port == term->port_hi || pi->dst_port == term->port_hi))
         return 1;
       return 0;
+    case TERM_HOST:
+      if (term->ip_len == 4) {
+        if (!pi->is_ipv4)
+          return 0;
+        if (term->ip_dir != HOST_DIR_DST && pi->src_ip_len == 4 &&
+            !memcmp(pi->src_ip, term->ip, 4))
+          return 1;
+        if (term->ip_dir != HOST_DIR_SRC && pi->dst_ip_len == 4 &&
+            !memcmp(pi->dst_ip, term->ip, 4))
+          return 1;
+        return 0;
+      } else if (term->ip_len == 16) {
+        if (!pi->is_ipv6)
+          return 0;
+        if (term->ip_dir != HOST_DIR_DST && pi->src_ip_len == 16 &&
+            !memcmp(pi->src_ip, term->ip, 16))
+          return 1;
+        if (term->ip_dir != HOST_DIR_SRC && pi->dst_ip_len == 16 &&
+            !memcmp(pi->dst_ip, term->ip, 16))
+          return 1;
+        return 0;
+      } else {
+        return 0;
+      }
     case TERM_ETHER_SRC:
       return !memcmp(pi->src_mac, term->mac, 6);
     case TERM_ETHER_DST:

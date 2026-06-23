@@ -149,6 +149,16 @@ static void fill_pkt(struct pkt_info *pi)
   pi->has_ports = 1;
   pi->src_port = 22;
   pi->dst_port = 40000;
+  pi->src_ip[0] = 10;
+  pi->src_ip[1] = 1;
+  pi->src_ip[2] = 2;
+  pi->src_ip[3] = 3;
+  pi->src_ip_len = 4;
+  pi->dst_ip[0] = 192;
+  pi->dst_ip[1] = 168;
+  pi->dst_ip[2] = 1;
+  pi->dst_ip[3] = 1;
+  pi->dst_ip_len = 4;
   pi->src_mac[0] = 0xaa;
   pi->src_mac[1] = 0xbb;
   pi->src_mac[2] = 0xcc;
@@ -315,6 +325,10 @@ static void test_filter_parse(void)
 {
   char *tcp[] = { "tcp" };
   char *combo[] = { "ether", "host", "aa:bb:cc:dd:ee:ff", "port", "53" };
+  char *host[] = { "host", "10.1.2.3" };
+  char *src_host[] = { "src", "host", "10.1.2.3" };
+  char *dst_host[] = { "dst", "host", "192.168.1.1" };
+  char *bad_host[] = { "host", "not-an-ip" };
   char *udp_ports[] = {
     "udp", "port", "67", "or", "udp", "port", "68"
   };
@@ -331,12 +345,20 @@ static void test_filter_parse(void)
     fail("test_filter_parse", "tcp parse failed");
   if (!parse_ok(5, combo, 2))
     fail("test_filter_parse", "combo parse failed");
+  if (!parse_ok(2, host, 1))
+    fail("test_filter_parse", "host parse failed");
+  if (!parse_ok(3, src_host, 1))
+    fail("test_filter_parse", "src host parse failed");
+  if (!parse_ok(3, dst_host, 1))
+    fail("test_filter_parse", "dst host parse failed");
   if (!parse_ok(7, udp_ports, 4))
     fail("test_filter_parse", "udp port/or parse failed");
   if (!parse_ok(8, grouped, 3))
     fail("test_filter_parse", "grouped parse failed");
   if (!parse_fail(1, bad_tok))
     fail("test_filter_parse", "bad token accepted");
+  if (!parse_fail(2, bad_host))
+    fail("test_filter_parse", "bad host accepted");
   if (!parse_fail(2, bad_port))
     fail("test_filter_parse", "bad port accepted");
   if (!parse_fail(3, bad_mac))
@@ -358,6 +380,12 @@ static void test_filter_match(void)
   char *src[] = { "ether", "src", "aa:bb:cc:dd:ee:ff" };
   char *dst[] = { "ether", "dst", "10:20:30:40:50:60" };
   char *host[] = { "ether", "host", "10:20:30:40:50:60" };
+  char *ip_host[] = { "host", "10.1.2.3" };
+  char *ip_src_host[] = { "src", "host", "10.1.2.3" };
+  char *ip_dst_host[] = { "dst", "host", "192.168.1.1" };
+  char *ip6_host[] = { "host", "2001:db8::1" };
+  char *ip6_src_host[] = { "src", "host", "2001:db8::1" };
+  char *ip6_dst_host[] = { "dst", "host", "2001:db8::2" };
   char *combo[] = { "tcp", "port", "22", "ether", "src", "aa:bb:cc:dd:ee:ff" };
   char *or_match[] = {
     "udp", "port", "53", "or", "tcp", "port", "22"
@@ -376,6 +404,18 @@ static void test_filter_match(void)
   pi6.has_ports = 1;
   pi6.src_port = 67;
   pi6.dst_port = 68;
+  pi6.src_ip[0] = 0x20;
+  pi6.src_ip[1] = 0x01;
+  pi6.src_ip[2] = 0x0d;
+  pi6.src_ip[3] = 0xb8;
+  pi6.src_ip[15] = 0x01;
+  pi6.src_ip_len = 16;
+  pi6.dst_ip[0] = 0x20;
+  pi6.dst_ip[1] = 0x01;
+  pi6.dst_ip[2] = 0x0d;
+  pi6.dst_ip[3] = 0xb8;
+  pi6.dst_ip[15] = 0x02;
+  pi6.dst_ip_len = 16;
 
   if (!match_ok(1, tcp, &pi))
     fail("test_filter_match", "tcp did not match");
@@ -391,6 +431,18 @@ static void test_filter_match(void)
     fail("test_filter_match", "ether dst did not match");
   if (!match_ok(3, host, &pi))
     fail("test_filter_match", "ether host did not match");
+  if (!match_ok(2, ip_host, &pi))
+    fail("test_filter_match", "ip host did not match");
+  if (!match_ok(3, ip_src_host, &pi))
+    fail("test_filter_match", "ip src host did not match");
+  if (!match_ok(3, ip_dst_host, &pi))
+    fail("test_filter_match", "ip dst host did not match");
+  if (!match_ok(2, ip6_host, &pi6))
+    fail("test_filter_match", "ip6 host did not match");
+  if (!match_ok(3, ip6_src_host, &pi6))
+    fail("test_filter_match", "ip6 src host did not match");
+  if (!match_ok(3, ip6_dst_host, &pi6))
+    fail("test_filter_match", "ip6 dst host did not match");
   if (!match_ok(6, combo, &pi))
     fail("test_filter_match", "combined filter did not match");
   if (!match_ok(7, or_match, &pi))
@@ -419,6 +471,23 @@ static void test_bpf_compile_ether(void)
     fail("test_bpf_compile_ether", "ether dst bpf compile failed");
   if (!bpf_compile_ok(3, host))
     fail("test_bpf_compile_ether", "ether host bpf compile failed");
+}
+
+static void test_bpf_compile_host(void)
+{
+  char *host[] = { "host", "10.1.2.3" };
+  char *src_host[] = { "src", "host", "10.1.2.3" };
+  char *dst_host[] = { "dst", "host", "192.168.1.1" };
+  char *host6[] = { "host", "2001:db8::1" };
+
+  if (!bpf_compile_ok(2, host))
+    fail("test_bpf_compile_host", "host bpf compile failed");
+  if (!bpf_compile_ok(3, src_host))
+    fail("test_bpf_compile_host", "src host bpf compile failed");
+  if (!bpf_compile_ok(3, dst_host))
+    fail("test_bpf_compile_host", "dst host bpf compile failed");
+  if (!bpf_compile_ok(2, host6))
+    fail("test_bpf_compile_host", "ipv6 host bpf compile failed");
 }
 
 static void test_bpf_compile_l4(void)
@@ -518,6 +587,15 @@ static void test_bpf_kernel_parity_crafted(void)
   if (!bpf_case_ok(3, (char *[]){"ether", "host", "10:20:30:40:50:60"},
       tcp_pkt, sizeof(tcp_pkt), 1))
     fail("test_bpf_kernel_parity_crafted", "ether host mismatch");
+  if (!bpf_case_ok(2, (char *[]){"host", "127.0.0.1"},
+      tcp_pkt, sizeof(tcp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "host mismatch");
+  if (!bpf_case_ok(3, (char *[]){"src", "host", "127.0.0.1"},
+      tcp_pkt, sizeof(tcp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "src host mismatch");
+  if (!bpf_case_ok(3, (char *[]){"dst", "host", "127.0.0.1"},
+      tcp_pkt, sizeof(tcp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "dst host mismatch");
   if (!bpf_case_ok(3, (char *[]){"ether", "dst", "66:55:44:33:22:11"},
       tcp_pkt, sizeof(tcp_pkt), 0))
     fail("test_bpf_kernel_parity_crafted", "ether dst negative mismatch");
@@ -614,6 +692,10 @@ static void test_packet_parse(void)
     fail("test_packet_parse", "missing parsed tcp fields");
   if (pi.src_port != 0x1234 || pi.dst_port != 0x0050)
     fail("test_packet_parse", "wrong parsed ports");
+  if (pi.src_ip_len != 4 || pi.dst_ip_len != 4)
+    fail("test_packet_parse", "missing parsed ipv4 addrs");
+  if (pi.src_ip[0] != 127 || pi.dst_ip[0] != 127)
+    fail("test_packet_parse", "wrong parsed ipv4 addrs");
 
   if (packet_parse(&pi, pkt6, sizeof(pkt6)) < 0) {
     fail("test_packet_parse", "valid ipv6 udp packet rejected");
@@ -624,6 +706,10 @@ static void test_packet_parse(void)
     fail("test_packet_parse", "missing parsed ipv6 udp fields");
   if (pi.src_port != 0x0043 || pi.dst_port != 0x0044)
     fail("test_packet_parse", "wrong parsed ipv6 ports");
+  if (pi.src_ip_len != 16 || pi.dst_ip_len != 16)
+    fail("test_packet_parse", "missing parsed ipv6 addrs");
+  if (pi.src_ip[15] != 1 || pi.dst_ip[15] != 2)
+    fail("test_packet_parse", "wrong parsed ipv6 addrs");
 }
 
 static void test_pcap_writer(void)
@@ -896,6 +982,7 @@ int main(void)
   test_filter_parse();
   test_filter_match();
   test_bpf_compile_ether();
+  test_bpf_compile_host();
   test_bpf_compile_l4();
   test_bpf_kernel_parity_crafted();
   test_bpf_libpcap_semantics();

@@ -1,3 +1,4 @@
+#include <arpa/inet.h>
 #include <errno.h>
 #include <getopt.h>
 #include <limits.h>
@@ -167,12 +168,28 @@ static void dump_indent(FILE *out, int depth)
 
 static void dump_term(FILE *out, const struct filter_term *term)
 {
+  char ip[INET6_ADDRSTRLEN];
+
   switch (term->kind) {
   case TERM_TCP:
     fputs("tcp", out);
     return;
   case TERM_UDP:
     fputs("udp", out);
+    return;
+  case TERM_HOST:
+    if (term->ip_len == 4)
+      inet_ntop(AF_INET, term->ip, ip, sizeof(ip));
+    else if (term->ip_len == 16)
+      inet_ntop(AF_INET6, term->ip, ip, sizeof(ip));
+    else
+      strcpy(ip, "<bad>");
+    if (term->ip_dir == HOST_DIR_SRC)
+      fprintf(out, "src host %s", ip);
+    else if (term->ip_dir == HOST_DIR_DST)
+      fprintf(out, "dst host %s", ip);
+    else
+      fprintf(out, "host %s", ip);
     return;
   case TERM_PORT:
     if (term->l4_proto == 6)

@@ -41,6 +41,14 @@ int packet_parse(struct pkt_info *pi, const void *buf, unsigned int len)
     return -1;
 
   pi->is_ipv4 = 1;
+  if (len >= 30) {
+    memcpy(pi->src_ip, p + 12, 4);
+    pi->src_ip_len = 4;
+  }
+  if (len >= 34) {
+    memcpy(pi->dst_ip, p + 16, 4);
+    pi->dst_ip_len = 4;
+  }
   if (len >= 24)
     pi->ip_proto = p[9];
   else
@@ -86,6 +94,14 @@ maybe_ipv6:
     return -1;
 
   pi->is_ipv6 = 1;
+  if (len >= 38) {
+    memcpy(pi->src_ip, p + 8, 16);
+    pi->src_ip_len = 16;
+  }
+  if (len >= 54) {
+    memcpy(pi->dst_ip, p + 24, 16);
+    pi->dst_ip_len = 16;
+  }
   if (len >= 21)
     pi->ip_proto = p[6];
   else
