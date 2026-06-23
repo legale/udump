@@ -38,6 +38,7 @@ Examples:
 ./cmd/udump/udump -i br-eth0 -w ssh.pcap -c 10 tcp port 22
 ./cmd/udump/udump -i br-eth0 -w short.pcap -G 5 udp
 ./cmd/udump/udump -i br-eth0 -w host.pcap ether host aa:bb:cc:dd:ee:ff
+./cmd/udump/udump -i br-eth0 -w ip-host.pcap host 192.168.1.1
 ./cmd/udump/udump -i br-eth0 -w debug-user.pcap --filter-mode user tcp port 22
 ./cmd/udump/udump -d udp port 67 or udp port 68
 ./cmd/udump/udump -d \( tcp or udp \) and port 53
@@ -57,6 +58,9 @@ Supported filters:
 - `tcp`
 - `udp`
 - `port <n>`
+- `host <ip>`
+- `src host <ip>`
+- `dst host <ip>`
 - `ether src <mac>`
 - `ether dst <mac>`
 - `ether host <mac>`
@@ -70,11 +74,15 @@ Grammar notes:
 - Evaluation is left-associative, like libpcap/tcpdump.
 - Parentheses are required if you want a different grouping.
 - `tcp port 22` and `udp port 67` are parsed as protocol-qualified port terms, matching libpcap semantics.
+- `host` matches source or destination IP address.
+- `src host` and `dst host` restrict the match to one side only.
 
 Examples:
 
 ```sh
 tcp port 22
+host 192.168.1.1
+src host 10.0.0.1
 udp ether host aa:bb:cc:dd:ee:ff
 tcp port 443 ether dst 00:11:22:33:44:55
 tcp or udp and port 53
@@ -101,7 +109,7 @@ exits with an error and does not silently fall back to userspace mode.
 ## Limitations
 
 - Only Ethernet L2 is supported.
-- `tcp`, `udp`, and `port` support Ethernet + IPv4 and minimal Ethernet + IPv6.
+- `tcp`, `udp`, `port`, and `host` support Ethernet + IPv4 and minimal Ethernet + IPv6.
 - IPv6 support is limited to direct TCP/UDP next-header handling; no extension header walk.
 - Filter compiler is a minimal `pcap_compile` analogue for the supported subset only.
 - No `not`, VLAN parsing, or full `tcpdump` grammar.
