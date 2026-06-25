@@ -203,6 +203,34 @@ static int compile_filter(struct filter *f, struct bpf_prog *prog, int argc,
   return 0;
 }
 
+static int same_bpf(int lhs_argc, char **lhs_argv, int rhs_argc,
+    char **rhs_argv)
+{
+  struct bpf_prog lhs_prog;
+  struct bpf_prog rhs_prog;
+  struct filter lhs;
+  struct filter rhs;
+  int same;
+
+  if (compile_filter(&lhs, &lhs_prog, lhs_argc, lhs_argv) < 0)
+    return 0;
+  if (compile_filter(&rhs, &rhs_prog, rhs_argc, rhs_argv) < 0) {
+    bpf_prog_free(&lhs_prog);
+    filter_free(&lhs);
+    return 0;
+  }
+
+  same = lhs_prog.len == rhs_prog.len &&
+      !memcmp(lhs_prog.insns, rhs_prog.insns,
+          lhs_prog.len * sizeof(*lhs_prog.insns));
+
+  bpf_prog_free(&rhs_prog);
+  filter_free(&rhs);
+  bpf_prog_free(&lhs_prog);
+  filter_free(&lhs);
+  return same;
+}
+
 static int bpf_compile_ok(int argc, char **argv)
 {
   struct sock_fprog fprog;
@@ -335,11 +363,24 @@ static void test_filter_parse(void)
   char *grouped[] = {
     "(", "tcp", "or", "udp", ")", "and", "port", "53"
   };
+  char *radius_string[] = {
+    "(port 1812 or port 1813 or port 1700 or port 3799) and "
+    "(host 172.16.140.4)"
+  };
+  char *radius_args[] = {
+    "(", "port", "1812", "or", "port", "1813", "or", "port", "1700",
+    "or", "port", "3799", ")", "and", "(", "host", "172.16.140.4", ")"
+  };
+  char *radius_attached[] = {
+    "(port", "1812", "or", "port", "1813", "or", "port", "1700", "or",
+    "port", "3799)", "and", "(host", "172.16.140.4)"
+  };
   char *bad_tok[] = { "foo" };
   char *bad_port[] = { "port", "70000" };
   char *bad_mac[] = { "ether", "src", "aa:bb" };
   char *bad_group[] = { "(", ")" };
   char *bad_op[] = { "tcp", "or", "and", "udp" };
+  char *bad_string[] = { "(tcp or udp" };
 
   if (!parse_ok(1, tcp, 1))
     fail("test_filter_parse", "tcp parse failed");
@@ -355,6 +396,12 @@ static void test_filter_parse(void)
     fail("test_filter_parse", "udp port/or parse failed");
   if (!parse_ok(8, grouped, 3))
     fail("test_filter_parse", "grouped parse failed");
+  if (!parse_ok(1, radius_string, 5))
+    fail("test_filter_parse", "single argument filter parse failed");
+  if (!parse_ok(14, radius_attached, 5))
+    fail("test_filter_parse", "attached parentheses parse failed");
+  if (!same_bpf(1, radius_string, 18, radius_args))
+    fail("test_filter_parse", "filter argument forms differ");
   if (!parse_fail(1, bad_tok))
     fail("test_filter_parse", "bad token accepted");
   if (!parse_fail(2, bad_host))
@@ -367,6 +414,8 @@ static void test_filter_parse(void)
     fail("test_filter_parse", "empty group accepted");
   if (!parse_fail(4, bad_op))
     fail("test_filter_parse", "bad operators accepted");
+  if (!parse_fail(1, bad_string))
+    fail("test_filter_parse", "unclosed string group accepted");
 }
 
 static void test_filter_match(void)

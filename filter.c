@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -168,6 +169,87 @@ struct parser {
   char **argv;
   int pos;
 };
+
+struct tokens {
+  char **argv;
+  int argc;
+  int cap;
+};
+
+static void tokens_free(struct tokens *toks)
+{
+  int i;
+
+  for (i = 0; i < toks->argc; i++)
+    free(toks->argv[i]);
+  free(toks->argv);
+  memset(toks, 0, sizeof(*toks));
+}
+
+static int tokens_add(struct tokens *toks, const char *str, size_t len)
+{
+  char **argv;
+  char *tok;
+  int cap;
+
+  if (toks->argc == toks->cap) {
+    cap = toks->cap ? toks->cap * 2 : 16;
+    argv = realloc(toks->argv, (size_t)cap * sizeof(*argv));
+    if (!argv) {
+      perror("realloc");
+      return -1;
+    }
+    toks->argv = argv;
+    toks->cap = cap;
+  }
+
+  tok = malloc(len + 1);
+  if (!tok) {
+    perror("malloc");
+    return -1;
+  }
+  memcpy(tok, str, len);
+  tok[len] = '\0';
+  toks->argv[toks->argc++] = tok;
+  return 0;
+}
+
+static int filter_tokenize(struct tokens *toks, int argc, char **argv)
+{
+  const char *start;
+  const char *p;
+  int i;
+
+  memset(toks, 0, sizeof(*toks));
+  for (i = 0; i < argc; i++) {
+    p = argv[i];
+    while (*p) {
+      while (isspace((unsigned char)*p))
+        p++;
+      if (!*p)
+        break;
+
+      if (*p == '(' || *p == ')') {
+        if (tokens_add(toks, p, 1) < 0)
+          goto err;
+        p++;
+        continue;
+      }
+
+      start = p;
+      while (*p && !isspace((unsigned char)*p) && *p != '(' && *p != ')')
+        p++;
+      if (tokens_add(toks, start, (size_t)(p - start)) < 0)
+        goto err;
+    }
+  }
+
+  return 0;
+
+err:
+  tokens_free(toks);
+  return -1;
+}
 
 static int parser_eof(const struct parser *ps)
 {
@@ -630,14 +712,22 @@ static struct filter_node *parse_expr(struct parser *ps)
 
 int filter_parse(struct filter *f, int argc, char **argv)
 {
+  struct tokens toks;
   struct parser ps;
 
   memset(f, 0, sizeof(*f));
   if (!argc)
     return 0;
 
-  ps.argc = argc;
-  ps.argv = argv;
+  if (filter_tokenize(&toks, argc, argv) < 0)
+    return -1;
+  if (!toks.argc) {
+    tokens_free(&toks);
+    return 0;
+  }
+
+  ps.argc = toks.argc;
+  ps.argv = toks.argv;
   ps.pos = 0;
 
   f->root = parse_expr(&ps);
@@ -649,10 +739,12 @@ int filter_parse(struct filter *f, int argc, char **argv)
     goto err;
   }
 
+  tokens_free(&toks);
   return 0;
 
 err:
   filter_free(f);
+  tokens_free(&toks);
   return -1;
 }
 
