@@ -890,6 +890,71 @@ static void test_pcap_writer(void)
   unlink(path);
 }
 
+static void test_pcap_stdout(void)
+{
+  struct pcap_writer pw;
+  struct timespec ts;
+  unsigned char data[4] = { 1, 2, 3, 4 };
+  unsigned char out[44];
+  int saved_stdout;
+  int fds[2];
+
+  if (pipe(fds) < 0) {
+    fail("test_pcap_stdout", "pipe failed");
+    return;
+  }
+
+  saved_stdout = dup(STDOUT_FILENO);
+  if (saved_stdout < 0) {
+    fail("test_pcap_stdout", "dup stdout failed");
+    close(fds[0]);
+    close(fds[1]);
+    return;
+  }
+
+  if (dup2(fds[1], STDOUT_FILENO) < 0) {
+    fail("test_pcap_stdout", "redirect stdout failed");
+    close(saved_stdout);
+    close(fds[0]);
+    close(fds[1]);
+    return;
+  }
+  close(fds[1]);
+
+  if (pcap_open(&pw, "-") < 0) {
+    fail("test_pcap_stdout", "pcap_open failed");
+    dup2(saved_stdout, STDOUT_FILENO);
+    close(saved_stdout);
+    close(fds[0]);
+    return;
+  }
+
+  if (dup2(saved_stdout, STDOUT_FILENO) < 0)
+    fail("test_pcap_stdout", "restore stdout failed");
+  close(saved_stdout);
+
+  ts.tv_sec = 1;
+  ts.tv_nsec = 2000;
+  if (pcap_write_packet(&pw, &ts, data, sizeof(data), sizeof(data)) < 0)
+    fail("test_pcap_stdout", "pcap_write_packet failed");
+  if (pcap_close(&pw) < 0)
+    fail("test_pcap_stdout", "pcap_close failed");
+
+  if (read_all(fds[0], out, sizeof(out)) < 0) {
+    fail("test_pcap_stdout", "read stream failed");
+  } else {
+    if (out[0] != 0xd4 || out[1] != 0xc3 ||
+        out[2] != 0xb2 || out[3] != 0xa1)
+      fail("test_pcap_stdout", "bad pcap magic");
+    if (get_le32(out + 24 + 8) != sizeof(data))
+      fail("test_pcap_stdout", "bad packet length");
+    if (memcmp(out + 40, data, sizeof(data)))
+      fail("test_pcap_stdout", "bad packet data");
+  }
+
+  close(fds[0]);
+}
+
 static void test_fixture_tcp_port_22(void)
 {
   unsigned char buf[65536];
@@ -1108,6 +1173,7 @@ int main(void)
   test_bpf_libpcap_semantics();
   test_packet_parse();
   test_pcap_writer();
+  test_pcap_stdout();
   test_fixture_tcp_port_22();
   test_bpf_fixture_parity();
   test_bpf_fixture_or_parity();

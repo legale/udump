@@ -46,9 +46,15 @@ int pcap_open(struct pcap_writer *pw, const char *path)
 {
   unsigned char hdr[24];
 
-  pw->fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+  if (!strcmp(path, "-"))
+    pw->fd = dup(STDOUT_FILENO);
+  else
+    pw->fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
   if (pw->fd < 0) {
-    perror(path);
+    if (!strcmp(path, "-"))
+      perror("dup");
+    else
+      perror(path);
     return -1;
   }
 
