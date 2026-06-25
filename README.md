@@ -66,6 +66,7 @@ Supported filters:
 - `ether src <mac>`
 - `ether dst <mac>`
 - `ether host <mac>`
+- `not`
 - explicit `and`
 - explicit `or`
 - parentheses for grouping
@@ -74,6 +75,7 @@ Grammar notes:
 
 - `and`, `or`, and implicit concatenation have the same precedence.
 - Evaluation is left-associative, like libpcap/tcpdump.
+- `not` is unary and applies to the next term or parenthesized group.
 - Parentheses are required if you want a different grouping.
 - `tcp port 22` and `udp port 67` are parsed as protocol-qualified port terms, matching libpcap semantics.
 - `host` matches source or destination IP address.
@@ -90,6 +92,7 @@ tcp port 443 ether dst 00:11:22:33:44:55
 tcp or udp and port 53
 \( tcp or udp \) and port 53
 udp port 67 or udp port 68
+not port 22
 ```
 
 The whole filter can be passed as one quoted argument:
@@ -111,7 +114,7 @@ Write the pcap stream to Wireshark over SSH:
 
 ```sh
 ssh sysadmin@10.241.200.132 \
-  'sudo udump -w - -i eth0 port 1812' |
+  'sudo udump -w - -i eth0 not port 22' |
 wireshark -k -i -
 ```
 
@@ -120,7 +123,7 @@ Bash process substitution is also supported:
 ```sh
 wireshark -k -i <(
   ssh sysadmin@10.241.200.132 \
-    'sudo udump -w - -i eth0 port 1812'
+    'sudo udump -w - -i eth0 not port 22'
 )
 ```
 
@@ -146,7 +149,7 @@ exits with an error and does not silently fall back to userspace mode.
 - `tcp`, `udp`, `port`, and `host` support Ethernet + IPv4 and minimal Ethernet + IPv6.
 - IPv6 support is limited to direct TCP/UDP next-header handling; no extension header walk.
 - Filter compiler is a minimal `pcap_compile` analogue for the supported subset only.
-- No `not`, VLAN parsing, or full `tcpdump` grammar.
+- No VLAN parsing or full `tcpdump` grammar.
 - No `pcapng`, only classic `pcap`.
 
 ## Tests
