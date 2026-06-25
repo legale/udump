@@ -835,6 +835,7 @@ static int compile_node_block(struct bpf_prog *prog, const struct filter_node *n
 {
   struct bpf_block lhs;
   struct bpf_block rhs;
+  struct bpf_patch_list tmp;
 
   switch (node->kind) {
   case NODE_TERM:
@@ -864,6 +865,15 @@ static int compile_node_block(struct bpf_prog *prog, const struct filter_node *n
       block_free(&rhs);
       return -1;
     }
+    return 0;
+  case NODE_NOT:
+    if (compile_node_block(prog, node->child, &lhs) < 0)
+      return -1;
+    *out = lhs;
+    tmp = out->trues;
+    out->trues = out->falses;
+    out->falses = tmp;
+    memset(&lhs, 0, sizeof(lhs));
     return 0;
   }
 

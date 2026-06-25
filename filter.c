@@ -151,6 +151,19 @@ static struct filter_node *node_or(struct filter_node *lhs,
   return node;
 }
 
+static struct filter_node *node_not(struct filter_node *child)
+{
+  struct filter_node *node;
+
+  node = node_alloc();
+  if (!node)
+    return NULL;
+
+  node->kind = NODE_NOT;
+  node->child = child;
+  return node;
+}
+
 static void filter_free_node(struct filter_node *node)
 {
   if (!node)
@@ -159,6 +172,8 @@ static void filter_free_node(struct filter_node *node)
   if (node->kind == NODE_AND || node->kind == NODE_OR) {
     filter_free_node(node->expr.lhs);
     filter_free_node(node->expr.rhs);
+  } else if (node->kind == NODE_NOT) {
+    filter_free_node(node->child);
   }
 
   free(node);
@@ -282,6 +297,8 @@ static int is_term_start(const char *tok)
   if (!strcmp(tok, "tcp"))
     return 1;
   if (!strcmp(tok, "udp"))
+    return 1;
+  if (!strcmp(tok, "not"))
     return 1;
   if (!strcmp(tok, "port"))
     return 1;
@@ -492,6 +509,20 @@ static struct filter_node *parse_term(struct parser *ps)
   }
   if (!strcmp(tok, "ether"))
     return parse_ether_atom(ps);
+  if (!strcmp(tok, "not")) {
+    struct filter_node *child;
+
+    parser_next(ps);
+    child = parse_term(ps);
+    if (!child)
+      return NULL;
+    node = node_not(child);
+    if (!node) {
+      filter_free_node(child);
+      return NULL;
+    }
+    return node;
+  }
   if (!strcmp(tok, "and") || !strcmp(tok, "or") || !strcmp(tok, ")")) {
     fprintf(stderr, "unexpected operator: %s\n", tok);
     return NULL;
@@ -516,6 +547,9 @@ static int node_eq(const struct filter_node *lhs, const struct filter_node *rhs)
 
   if (lhs->kind == NODE_TERM)
     return !memcmp(&lhs->term, &rhs->term, sizeof(lhs->term));
+
+  if (lhs->kind == NODE_NOT)
+    return node_eq(lhs->child, rhs->child);
 
   return node_eq(lhs->expr.lhs, rhs->expr.lhs) &&
       node_eq(lhs->expr.rhs, rhs->expr.rhs);
@@ -621,6 +655,16 @@ static struct filter_node *filter_normalize_node(const struct filter_node *node)
 
   if (node->kind == NODE_TERM)
     return node_term_copy(&node->term);
+
+  if (node->kind == NODE_NOT) {
+    lhs = filter_normalize_node(node->child);
+    if (!lhs)
+      return NULL;
+    out = node_not(lhs);
+    if (!out)
+      filter_free_node(lhs);
+    return out;
+  }
 
   lhs = filter_normalize_node(node->expr.lhs);
   if (!lhs)
@@ -816,6 +860,8 @@ static int filter_match_node(const struct filter_node *node,
     if (filter_match_node(node->expr.lhs, pi))
       return 1;
     return filter_match_node(node->expr.rhs, pi);
+  case NODE_NOT:
+    return !filter_match_node(node->child, pi);
   }
 
   return 0;

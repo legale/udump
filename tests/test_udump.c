@@ -97,6 +97,10 @@ static int parse_ok(int argc, char **argv, int expect_terms)
         terms++;
         continue;
       }
+      if (node->kind == NODE_NOT) {
+        stack[sp++] = node->child;
+        continue;
+      }
       stack[sp++] = node->expr.rhs;
       stack[sp++] = node->expr.lhs;
     }
@@ -367,10 +371,12 @@ static void test_filter_parse(void)
     "(port 1812 or port 1813 or port 1700 or port 3799) and "
     "(host 172.16.140.4)"
   };
+  char *not_string[] = { "not port 22" };
   char *radius_args[] = {
     "(", "port", "1812", "or", "port", "1813", "or", "port", "1700",
     "or", "port", "3799", ")", "and", "(", "host", "172.16.140.4", ")"
   };
+  char *not_args[] = { "not", "port", "22" };
   char *radius_attached[] = {
     "(port", "1812", "or", "port", "1813", "or", "port", "1700", "or",
     "port", "3799)", "and", "(host", "172.16.140.4)"
@@ -379,6 +385,7 @@ static void test_filter_parse(void)
   char *bad_port[] = { "port", "70000" };
   char *bad_mac[] = { "ether", "src", "aa:bb" };
   char *bad_group[] = { "(", ")" };
+  char *bad_not[] = { "not" };
   char *bad_op[] = { "tcp", "or", "and", "udp" };
   char *bad_string[] = { "(tcp or udp" };
 
@@ -398,10 +405,14 @@ static void test_filter_parse(void)
     fail("test_filter_parse", "grouped parse failed");
   if (!parse_ok(1, radius_string, 5))
     fail("test_filter_parse", "single argument filter parse failed");
+  if (!parse_ok(1, not_string, 1))
+    fail("test_filter_parse", "single argument not filter parse failed");
   if (!parse_ok(14, radius_attached, 5))
     fail("test_filter_parse", "attached parentheses parse failed");
   if (!same_bpf(1, radius_string, 18, radius_args))
     fail("test_filter_parse", "filter argument forms differ");
+  if (!same_bpf(1, not_string, 3, not_args))
+    fail("test_filter_parse", "not argument forms differ");
   if (!parse_fail(1, bad_tok))
     fail("test_filter_parse", "bad token accepted");
   if (!parse_fail(2, bad_host))
@@ -412,6 +423,8 @@ static void test_filter_parse(void)
     fail("test_filter_parse", "bad mac accepted");
   if (!parse_fail(2, bad_group))
     fail("test_filter_parse", "empty group accepted");
+  if (!parse_fail(1, bad_not))
+    fail("test_filter_parse", "bare not accepted");
   if (!parse_fail(4, bad_op))
     fail("test_filter_parse", "bad operators accepted");
   if (!parse_fail(1, bad_string))
@@ -444,6 +457,7 @@ static void test_filter_match(void)
   char *or_fail[] = {
     "udp", "port", "53", "or", "tcp", "port", "80"
   };
+  char *not_port[] = { "not", "port", "22" };
   char *left_assoc[] = {
     "tcp", "or", "udp", "and", "port", "22"
   };
@@ -560,6 +574,10 @@ static void test_filter_match(void)
     fail("test_filter_match", "or filter did not match");
   if (!match_fail(7, or_fail, &pi))
     fail("test_filter_match", "or filter false-positive");
+  if (!match_fail(3, not_port, &pi))
+    fail("test_filter_match", "not port 22 matched tcp packet");
+  if (!match_ok(3, not_port, &pi6))
+    fail("test_filter_match", "not port 22 missed udp packet");
   if (!match_ok(6, left_assoc, &pi))
     fail("test_filter_match", "left-assoc libpcap semantics mismatch");
   if (!match_ok(1, udp, &pi6))
@@ -686,6 +704,15 @@ static void test_bpf_kernel_parity_crafted(void)
     fail("test_bpf_kernel_parity_crafted", "port 22 mismatch");
   if (!bpf_case_ok(2, (char *[]){"port", "53"}, udp_pkt, sizeof(udp_pkt), 1))
     fail("test_bpf_kernel_parity_crafted", "port 53 mismatch");
+  if (!bpf_case_ok(3, (char *[]){"not", "port", "22"},
+      tcp_pkt, sizeof(tcp_pkt), 0))
+    fail("test_bpf_kernel_parity_crafted", "not port 22 tcp mismatch");
+  if (!bpf_case_ok(3, (char *[]){"not", "port", "22"},
+      udp_pkt, sizeof(udp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "not port 22 udp mismatch");
+  if (!bpf_case_ok(3, (char *[]){"not", "port", "22"},
+      arp_pkt, sizeof(arp_pkt), 1))
+    fail("test_bpf_kernel_parity_crafted", "not port 22 arp mismatch");
   if (!bpf_case_ok(7, (char *[]){"udp", "port", "67", "or", "udp", "port", "68"},
       udp67_pkt, sizeof(udp67_pkt), 1))
     fail("test_bpf_kernel_parity_crafted", "udp port or mismatch");
@@ -770,6 +797,12 @@ static void test_bpf_libpcap_semantics(void)
   if (!bpf_case_ok(8, (char *[]){"tcp", "or", "(", "udp", "and", "port", "53", ")"},
       tcp_pkt, sizeof(tcp_pkt), 1))
     fail("test_bpf_libpcap_semantics", "explicit right-group mismatch");
+  if (!bpf_case_ok(3, (char *[]){"not", "port", "22"},
+      tcp_pkt, sizeof(tcp_pkt), 0))
+    fail("test_bpf_libpcap_semantics", "not port 22 tcp mismatch");
+  if (!bpf_case_ok(3, (char *[]){"not", "port", "22"},
+      udp53_pkt, sizeof(udp53_pkt), 1))
+    fail("test_bpf_libpcap_semantics", "not port 22 udp mismatch");
 }
 
 static void test_packet_parse(void)

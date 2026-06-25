@@ -33,6 +33,7 @@ enum filter_node_kind {
   NODE_TERM,
   NODE_AND,
   NODE_OR,
+  NODE_NOT,
 };
 
 struct filter_node {
@@ -43,6 +44,7 @@ struct filter_node {
       struct filter_node *lhs;
       struct filter_node *rhs;
     } expr;
+    struct filter_node *child;
   };
 };
 

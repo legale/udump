@@ -233,6 +233,12 @@ static void dump_ast(FILE *out, const struct filter_node *node, int depth)
     return;
   }
 
+  if (node->kind == NODE_NOT) {
+    fputs("not\n", out);
+    dump_ast(out, node->child, depth + 1);
+    return;
+  }
+
   if (node->kind == NODE_AND)
     fputs("and\n", out);
   else
