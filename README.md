@@ -40,6 +40,8 @@ Examples:
 ./udump -i br-eth0 -w host.pcap ether host aa:bb:cc:dd:ee:ff
 ./udump -i br-eth0 -w ip-host.pcap host 192.168.1.1
 ./udump -i br-eth0 -w debug-user.pcap --filter-mode user tcp port 22
+./udump -i br-eth0 -w radius.pcap \
+  "(port 1812 or port 1813 or port 1700 or port 3799) and (host 172.16.140.4)"
 ./udump -d udp port 67 or udp port 68
 ./udump -d \( tcp or udp \) and port 53
 ```
@@ -48,7 +50,7 @@ Options:
 
 - `-d`: compile-only mode, print filter tokens, parsed AST, normalized AST, and final classic BPF disassembly, then exit.
 - `-i <ifname>`: Linux interface name.
-- `-w <output_file>`: write captured packets to classic `pcap`.
+- `-w <output_file>`: write captured packets to classic `pcap`; use `-w -` for stdout.
 - `-c <count>`: stop after writing this many matched packets.
 - `-G <seconds>`: stop after this many seconds.
 - `--filter-mode <bpf|user>`: `bpf` by default, `user` for explicit userspace fallback.
@@ -88,6 +90,38 @@ tcp port 443 ether dst 00:11:22:33:44:55
 tcp or udp and port 53
 \( tcp or udp \) and port 53
 udp port 67 or udp port 68
+```
+
+The whole filter can be passed as one quoted argument:
+
+```sh
+./udump -i eth0 -w radius.pcap \
+  "(port 1812 or port 1813 or port 1700 or port 3799) and (host 172.16.140.4)"
+```
+
+Without quotes, parentheses must be escaped from the shell:
+
+```sh
+./udump -i eth0 -w radius.pcap \
+  \( port 1812 or port 1813 or port 1700 or port 3799 \) \
+  and \( host 172.16.140.4 \)
+```
+
+Write the pcap stream to Wireshark over SSH:
+
+```sh
+ssh sysadmin@10.241.200.132 \
+  'sudo udump -w - -i eth0 port 1812' |
+wireshark -k -i -
+```
+
+Bash process substitution is also supported:
+
+```sh
+wireshark -k -i <(
+  ssh sysadmin@10.241.200.132 \
+    'sudo udump -w - -i eth0 port 1812'
+)
 ```
 
 By default `udump` compiles the filter into classic BPF and attaches it to the
