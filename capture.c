@@ -3,11 +3,15 @@
 #include <limits.h>
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
 #include <net/if.h>
+#include <net/if_arp.h>
 #include <poll.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -16,6 +20,50 @@
 #include "filter.h"
 #include "packet.h"
 #include "pcap.h"
+
+int capture_linktype(unsigned short hw_type, unsigned int *linktype)
+{
+  switch (hw_type) {
+  case ARPHRD_ETHER:
+  case ARPHRD_LOOPBACK:
+    *linktype = PCAP_LINKTYPE_EN10MB;
+    return 0;
+  case ARPHRD_IEEE80211:
+    *linktype = PCAP_LINKTYPE_IEEE802_11;
+    return 0;
+  case ARPHRD_IEEE80211_PRISM:
+    *linktype = PCAP_LINKTYPE_PRISM_HEADER;
+    return 0;
+  case ARPHRD_IEEE80211_RADIOTAP:
+    *linktype = PCAP_LINKTYPE_IEEE802_11_RADIO;
+    return 0;
+  default:
+    return -1;
+  }
+}
+
+static const char *linktype_name(unsigned int linktype)
+{
+  switch (linktype) {
+  case PCAP_LINKTYPE_EN10MB:
+    return "EN10MB (Ethernet)";
+  case PCAP_LINKTYPE_IEEE802_11:
+    return "IEEE802_11 (802.11)";
+  case PCAP_LINKTYPE_PRISM_HEADER:
+    return "PRISM_HEADER (802.11 plus Prism header)";
+  case PCAP_LINKTYPE_IEEE802_11_RADIO:
+    return "IEEE802_11_RADIO (802.11 plus radiotap header)";
+  default:
+    return "UNKNOWN";
+  }
+}
+
+void capture_banner(const char *progname, const char *ifname,
+    unsigned int linktype, unsigned int snaplen)
+{
+  fprintf(stderr, "%s: listening on %s, link-type %s, snapshot length %u bytes\n",
+      progname, ifname, linktype_name(linktype), snaplen);
+}
 
 static int now_ms(unsigned long long *out)
 {
@@ -31,17 +79,116 @@ static int now_ms(unsigned long long *out)
   return 0;
 }
 
-static int open_socket(const char *ifname)
+static int get_link_type(unsigned int ifindex, unsigned short *hw_type)
 {
-  struct sockaddr_ll sll;
-  unsigned int ifindex;
+  struct {
+    struct nlmsghdr nlh;
+    struct ifinfomsg ifm;
+  } req;
+  struct sockaddr_nl addr;
+  struct timeval tv;
+  unsigned char buf[8192];
+  struct nlmsghdr *nlh;
+  ssize_t len;
   int fd;
 
-  ifindex = if_nametoindex(ifname);
-  if (!ifindex) {
-    fprintf(stderr, "unknown interface: %s\n", ifname);
+  fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+  if (fd < 0) {
+    perror("socket(AF_NETLINK)");
     return -1;
   }
+
+  memset(&addr, 0, sizeof(addr));
+  addr.nl_family = AF_NETLINK;
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    perror("bind(AF_NETLINK)");
+    close(fd);
+    return -1;
+  }
+
+  tv.tv_sec = 0;
+  tv.tv_usec = 100000;
+  if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+    perror("setsockopt(SO_RCVTIMEO)");
+    close(fd);
+    return -1;
+  }
+
+  memset(&req, 0, sizeof(req));
+  req.nlh.nlmsg_len = sizeof(req);
+  req.nlh.nlmsg_type = RTM_GETLINK;
+  req.nlh.nlmsg_flags = NLM_F_REQUEST;
+  req.nlh.nlmsg_seq = 1;
+  req.nlh.nlmsg_pid = getpid();
+  req.ifm.ifi_family = AF_UNSPEC;
+  req.ifm.ifi_index = (int)ifindex;
+
+  memset(&addr, 0, sizeof(addr));
+  addr.nl_family = AF_NETLINK;
+  if (sendto(fd, &req, req.nlh.nlmsg_len, 0,
+      (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    perror("sendto(RTM_GETLINK)");
+    close(fd);
+    return -1;
+  }
+
+  for (;;) {
+    len = recv(fd, buf, sizeof(buf), 0);
+    if (len < 0) {
+      if (errno == EINTR)
+        continue;
+      perror("recv(RTM_GETLINK)");
+      close(fd);
+      return -1;
+    }
+
+    for (nlh = (struct nlmsghdr *)buf; NLMSG_OK(nlh, len);
+        nlh = NLMSG_NEXT(nlh, len)) {
+      struct ifinfomsg *ifm;
+
+      if (nlh->nlmsg_seq != req.nlh.nlmsg_seq)
+        continue;
+      if (nlh->nlmsg_type == NLMSG_ERROR) {
+        struct nlmsgerr *err;
+
+        if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(*err))) {
+          errno = EPROTO;
+          perror("RTM_GETLINK");
+          close(fd);
+          return -1;
+        }
+        err = NLMSG_DATA(nlh);
+        if (!err->error)
+          continue;
+        errno = -err->error;
+        perror("RTM_GETLINK");
+        close(fd);
+        return -1;
+      }
+      if (nlh->nlmsg_type != RTM_NEWLINK)
+        continue;
+      if (nlh->nlmsg_len < NLMSG_LENGTH(sizeof(*ifm))) {
+        errno = EPROTO;
+        perror("RTM_GETLINK");
+        close(fd);
+        return -1;
+      }
+
+      ifm = NLMSG_DATA(nlh);
+      if (ifm->ifi_index != (int)ifindex)
+        continue;
+
+      *hw_type = ifm->ifi_type;
+      close(fd);
+      return 0;
+    }
+  }
+}
+
+static int open_socket(unsigned int ifindex)
+{
+  struct sockaddr_ll sll;
+  int fd;
 
   fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
   if (fd < 0) {
@@ -125,7 +272,10 @@ static int attach_bpf(int fd, const struct filter *f)
 
 int capture_run(const struct capture_cfg *cfg)
 {
-  unsigned char buf[65536];
+  unsigned char buf[PCAP_SNAPLEN];
+  unsigned int linktype;
+  unsigned int ifindex;
+  unsigned short hw_type;
   struct pkt_info pi;
   struct pcap_writer pw;
   struct timespec ts;
@@ -135,10 +285,25 @@ int capture_run(const struct capture_cfg *cfg)
   int ready;
   int fd;
 
-  if (pcap_open(&pw, cfg->out_path) < 0)
+  ifindex = if_nametoindex(cfg->ifname);
+  if (!ifindex) {
+    fprintf(stderr, "unknown interface: %s\n", cfg->ifname);
+    return -1;
+  }
+
+  if (get_link_type(ifindex, &hw_type) < 0)
     return -1;
 
-  fd = open_socket(cfg->ifname);
+  if (capture_linktype(hw_type, &linktype) < 0) {
+    fprintf(stderr, "unsupported interface type %u on %s\n",
+        hw_type, cfg->ifname);
+    return -1;
+  }
+
+  if (pcap_open(&pw, cfg->out_path, PCAP_SNAPLEN, linktype) < 0)
+    return -1;
+
+  fd = open_socket(ifindex);
   if (fd < 0) {
     pcap_close(&pw);
     return -1;
@@ -150,6 +315,9 @@ int capture_run(const struct capture_cfg *cfg)
     pcap_close(&pw);
     return -1;
   }
+
+  capture_banner(cfg->progname ? cfg->progname : "udump", cfg->ifname,
+      linktype, PCAP_SNAPLEN);
 
   deadline_ms = 0;
   if (cfg->time_limit) {

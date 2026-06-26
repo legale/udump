@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <net/if_arp.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 #include <unistd.h>
 
 #include "../bpf.h"
+#include "../capture.h"
 #include "../filter.h"
 #include "../packet.h"
 #include "../pcap.h"
@@ -881,7 +883,7 @@ static void test_pcap_writer(void)
   }
   close(fd);
 
-  if (pcap_open(&pw, path) < 0) {
+  if (pcap_open(&pw, path, 4096, PCAP_LINKTYPE_IEEE802_11_RADIO) < 0) {
     fail("test_pcap_writer", "pcap_open failed");
     unlink(path);
     return;
@@ -918,6 +920,10 @@ static void test_pcap_writer(void)
 
   if (hdr[0] != 0xd4 || hdr[1] != 0xc3 || hdr[2] != 0xb2 || hdr[3] != 0xa1)
     fail("test_pcap_writer", "bad pcap magic");
+  if (get_le32(hdr + 16) != 4096)
+    fail("test_pcap_writer", "bad snaplen");
+  if (get_le32(hdr + 20) != PCAP_LINKTYPE_IEEE802_11_RADIO)
+    fail("test_pcap_writer", "bad linktype");
 
   close(fd);
   unlink(path);
@@ -954,7 +960,7 @@ static void test_pcap_stdout(void)
   }
   close(fds[1]);
 
-  if (pcap_open(&pw, "-") < 0) {
+  if (pcap_open(&pw, "-", PCAP_SNAPLEN, PCAP_LINKTYPE_EN10MB) < 0) {
     fail("test_pcap_stdout", "pcap_open failed");
     dup2(saved_stdout, STDOUT_FILENO);
     close(saved_stdout);
@@ -986,6 +992,78 @@ static void test_pcap_stdout(void)
   }
 
   close(fds[0]);
+}
+
+static void test_capture_banner(void)
+{
+  char buf[256];
+  int saved_stderr;
+  int fds[2];
+  ssize_t n;
+
+  if (pipe(fds) < 0) {
+    fail("test_capture_banner", "pipe failed");
+    return;
+  }
+
+  saved_stderr = dup(STDERR_FILENO);
+  if (saved_stderr < 0) {
+    fail("test_capture_banner", "dup stderr failed");
+    close(fds[0]);
+    close(fds[1]);
+    return;
+  }
+
+  if (dup2(fds[1], STDERR_FILENO) < 0) {
+    fail("test_capture_banner", "redirect stderr failed");
+    close(saved_stderr);
+    close(fds[0]);
+    close(fds[1]);
+    return;
+  }
+  close(fds[1]);
+
+  capture_banner("udump", "lo", PCAP_LINKTYPE_EN10MB, PCAP_SNAPLEN);
+
+  if (dup2(saved_stderr, STDERR_FILENO) < 0)
+    fail("test_capture_banner", "restore stderr failed");
+  close(saved_stderr);
+
+  n = read(fds[0], buf, sizeof(buf) - 1);
+  if (n < 0) {
+    fail("test_capture_banner", "read failed");
+  } else {
+    buf[n] = '\0';
+    if (!strstr(buf,
+        "udump: listening on lo, link-type EN10MB (Ethernet), "
+        "snapshot length 262144 bytes\n"))
+      fail("test_capture_banner", "bad banner");
+  }
+
+  close(fds[0]);
+}
+
+static void test_capture_linktype(void)
+{
+  unsigned int linktype;
+
+  if (capture_linktype(ARPHRD_ETHER, &linktype) < 0 ||
+      linktype != PCAP_LINKTYPE_EN10MB)
+    fail("test_capture_linktype", "bad Ethernet linktype");
+  if (capture_linktype(ARPHRD_LOOPBACK, &linktype) < 0 ||
+      linktype != PCAP_LINKTYPE_EN10MB)
+    fail("test_capture_linktype", "bad loopback linktype");
+  if (capture_linktype(ARPHRD_IEEE80211, &linktype) < 0 ||
+      linktype != PCAP_LINKTYPE_IEEE802_11)
+    fail("test_capture_linktype", "bad 802.11 linktype");
+  if (capture_linktype(ARPHRD_IEEE80211_PRISM, &linktype) < 0 ||
+      linktype != PCAP_LINKTYPE_PRISM_HEADER)
+    fail("test_capture_linktype", "bad Prism linktype");
+  if (capture_linktype(ARPHRD_IEEE80211_RADIOTAP, &linktype) < 0 ||
+      linktype != PCAP_LINKTYPE_IEEE802_11_RADIO)
+    fail("test_capture_linktype", "bad radiotap linktype");
+  if (capture_linktype(ARPHRD_NONE, &linktype) == 0)
+    fail("test_capture_linktype", "unsupported type accepted");
 }
 
 static void test_fixture_tcp_port_22(void)
@@ -1207,6 +1285,8 @@ int main(void)
   test_packet_parse();
   test_pcap_writer();
   test_pcap_stdout();
+  test_capture_banner();
+  test_capture_linktype();
   test_fixture_tcp_port_22();
   test_bpf_fixture_parity();
   test_bpf_fixture_or_parity();

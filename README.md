@@ -27,7 +27,7 @@ make san
 ## Usage
 
 ```sh
-./udump [-d] [-i <ifname> -w <output_file>] [-c <count>] [-G <seconds>] \
+./udump [-d] [-e] [-i <ifname> -w <output_file>] [-c <count>] [-G <seconds>] \
   [--filter-mode <bpf|user>] [filter...]
 ```
 
@@ -49,6 +49,8 @@ Examples:
 Options:
 
 - `-d`: compile-only mode, print filter tokens, parsed AST, normalized AST, and final classic BPF disassembly, then exit.
+- `-e`: accepted for tcpdump CLI compatibility. `udump` still writes pcap data
+  to `-w` and does not print packet lines.
 - `-i <ifname>`: Linux interface name.
 - `-w <output_file>`: write captured packets to classic `pcap`; use `-w -` for stdout.
 - `-c <count>`: stop after writing this many matched packets.
@@ -139,6 +141,8 @@ exits with an error and does not silently fall back to userspace mode.
 - Output files are readable by `tcpdump -r` and Wireshark.
 - Default filtering path is kernel classic BPF attached to the socket.
 - Userspace filtering is kept only as an explicit fallback via `--filter-mode user`.
+- On capture start, `udump` reads the interface type with `RTM_GETLINK` and
+  prints the resulting pcap link type and configured snapshot length to stderr.
 - `-d` does not require `-i` or `-w`; it only compiles and prints the filter.
 - `-d` prints the final BPF in a tcpdump-style disassembly format.
 - There is no packet pretty-printing to stdout.

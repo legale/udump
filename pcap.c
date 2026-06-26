@@ -42,7 +42,8 @@ static int write_all(int fd, const void *buf, size_t len)
   return 0;
 }
 
-int pcap_open(struct pcap_writer *pw, const char *path)
+int pcap_open(struct pcap_writer *pw, const char *path, unsigned int snaplen,
+    unsigned int linktype)
 {
   unsigned char hdr[24];
 
@@ -63,8 +64,8 @@ int pcap_open(struct pcap_writer *pw, const char *path)
   put_le16(hdr + 6, 4);
   put_le32(hdr + 8, 0);
   put_le32(hdr + 12, 0);
-  put_le32(hdr + 16, 65535u);
-  put_le32(hdr + 20, 1u);
+  put_le32(hdr + 16, snaplen);
+  put_le32(hdr + 20, linktype);
 
   if (write_all(pw->fd, hdr, sizeof(hdr)) < 0) {
     perror("write");

@@ -12,6 +12,7 @@
 
 struct opts {
   int debug;
+  int ether;
   const char *ifname;
   const char *out_path;
   enum filter_mode filter_mode;
@@ -24,7 +25,7 @@ struct opts {
 static void usage(FILE *out, const char *prog)
 {
   fprintf(out,
-      "usage: %s [-d] [-i <ifname> -w <output_file>] [-c <count>] "
+      "usage: %s [-d] [-e] [-i <ifname> -w <output_file>] [-c <count>] "
       "[-G <seconds>] "
       "[--filter-mode <bpf|user>] "
       "[filter ...]\n",
@@ -92,7 +93,7 @@ static int parse_opts(struct opts *opts, int argc, char **argv)
   opts->filter_mode = FILTER_MODE_BPF;
   have_filter_mode = 0;
 
-  while ((c = getopt_long(argc, argv, "c:G:di:w:", long_opts, NULL)) != -1) {
+  while ((c = getopt_long(argc, argv, "c:G:dei:w:", long_opts, NULL)) != -1) {
     switch (c) {
     case 'c':
       if (opts->pkt_limit) {
@@ -116,6 +117,13 @@ static int parse_opts(struct opts *opts, int argc, char **argv)
         return -1;
       }
       opts->debug = 1;
+      break;
+    case 'e':
+      if (opts->ether) {
+        fprintf(stderr, "duplicate -e option\n");
+        return -1;
+      }
+      opts->ether = 1;
       break;
     case 'i':
       if (opts->ifname) {
@@ -287,12 +295,19 @@ int main(int argc, char **argv)
   struct capture_cfg cfg;
   struct filter flt;
   struct opts opts;
+  const char *prog;
   int rc;
 
   if (parse_opts(&opts, argc, argv) < 0) {
     usage(stderr, argv[0]);
     return 1;
   }
+
+  prog = strrchr(argv[0], '/');
+  if (prog)
+    prog++;
+  else
+    prog = argv[0];
 
   if (filter_parse(&flt, opts.filter_argc, opts.filter_argv) < 0)
     return 1;
@@ -303,6 +318,7 @@ int main(int argc, char **argv)
     return rc < 0;
   }
 
+  cfg.progname = prog;
   cfg.ifname = opts.ifname;
   cfg.out_path = opts.out_path;
   cfg.filter = &flt;

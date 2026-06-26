@@ -9,6 +9,7 @@ enum filter_mode {
 };
 
 struct capture_cfg {
+  const char *progname;
   const char *ifname;
   const char *out_path;
   const struct filter *filter;
@@ -17,6 +18,9 @@ struct capture_cfg {
   unsigned int time_limit;
 };
 
+int capture_linktype(unsigned short hw_type, unsigned int *linktype);
+void capture_banner(const char *progname, const char *ifname,
+    unsigned int linktype, unsigned int snaplen);
 int capture_run(const struct capture_cfg *cfg);
 
 #endif
