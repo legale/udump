@@ -6,6 +6,7 @@
 #include "cli.h"
 #include "capture.h"
 #include "filter.h"
+#include "pcap.h"
 
 static void dump_indent(FILE *out, int depth)
 {
