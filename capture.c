@@ -9,6 +9,7 @@
 #include <net/if_arp.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -272,9 +273,10 @@ static int attach_bpf(int fd, const struct filter *f)
 
 int capture_run(const struct capture_cfg *cfg)
 {
-  unsigned char buf[PCAP_SNAPLEN];
+  unsigned char *buf;
   unsigned int linktype;
   unsigned int ifindex;
+  unsigned int snaplen;
   unsigned short hw_type;
   struct pkt_info pi;
   struct pcap_writer pw;
@@ -284,47 +286,65 @@ int capture_run(const struct capture_cfg *cfg)
   ssize_t len;
   int ready;
   int fd;
+  int rc;
+
+  snaplen = cfg->snaplen ? cfg->snaplen : PCAP_SNAPLEN;
+
+  buf = malloc(snaplen);
+  if (!buf) {
+    perror("malloc");
+    return -1;
+  }
 
   ifindex = if_nametoindex(cfg->ifname);
   if (!ifindex) {
     fprintf(stderr, "unknown interface: %s\n", cfg->ifname);
-    return -1;
+    rc = -1;
+    goto out;
   }
 
-  if (get_link_type(ifindex, &hw_type) < 0)
-    return -1;
+  if (get_link_type(ifindex, &hw_type) < 0) {
+    rc = -1;
+    goto out;
+  }
 
   if (capture_linktype(hw_type, &linktype) < 0) {
     fprintf(stderr, "unsupported interface type %u on %s\n",
         hw_type, cfg->ifname);
-    return -1;
+    rc = -1;
+    goto out;
   }
 
-  if (pcap_open(&pw, cfg->out_path, PCAP_SNAPLEN, linktype) < 0)
-    return -1;
+  if (pcap_open(&pw, cfg->out_path, snaplen, linktype) < 0) {
+    rc = -1;
+    goto out;
+  }
 
   fd = open_socket(ifindex);
   if (fd < 0) {
     pcap_close(&pw);
-    return -1;
+    rc = -1;
+    goto out;
   }
 
   if (cfg->filter_mode == FILTER_MODE_BPF &&
       attach_bpf(fd, cfg->filter) < 0) {
     close(fd);
     pcap_close(&pw);
-    return -1;
+    rc = -1;
+    goto out;
   }
 
   capture_banner(cfg->progname ? cfg->progname : "udump", cfg->ifname,
-      linktype, PCAP_SNAPLEN);
+      linktype, snaplen);
 
   deadline_ms = 0;
   if (cfg->time_limit) {
     if (now_ms(&deadline_ms) < 0) {
       close(fd);
       pcap_close(&pw);
-      return -1;
+      rc = -1;
+      goto out;
     }
     deadline_ms += (unsigned long long)cfg->time_limit * 1000ull;
   }
@@ -335,20 +355,22 @@ int capture_run(const struct capture_cfg *cfg)
     if (ready < 0) {
       close(fd);
       pcap_close(&pw);
-      return -1;
+      rc = -1;
+      goto out;
     }
 
     if (!ready)
       break;
 
-    len = recvfrom(fd, buf, sizeof(buf), 0, NULL, NULL);
+    len = recvfrom(fd, buf, snaplen, 0, NULL, NULL);
     if (len < 0) {
       if (errno == EINTR)
         continue;
       perror("recvfrom");
       close(fd);
       pcap_close(&pw);
-      return -1;
+      rc = -1;
+      goto out;
     }
 
     if (cfg->filter_mode == FILTER_MODE_USER &&
@@ -363,14 +385,16 @@ int capture_run(const struct capture_cfg *cfg)
       perror("clock_gettime");
       close(fd);
       pcap_close(&pw);
-      return -1;
+      rc = -1;
+      goto out;
     }
 
     if (pcap_write_packet(&pw, &ts, buf, (unsigned int)len,
         (unsigned int)len) < 0) {
       close(fd);
       pcap_close(&pw);
-      return -1;
+      rc = -1;
+      goto out;
     }
 
     seen++;
@@ -381,11 +405,17 @@ int capture_run(const struct capture_cfg *cfg)
   if (close(fd) < 0) {
     perror("close");
     pcap_close(&pw);
-    return -1;
+    rc = -1;
+    goto out;
   }
 
-  if (pcap_close(&pw) < 0)
-    return -1;
+  if (pcap_close(&pw) < 0) {
+    rc = -1;
+    goto out;
+  }
 
-  return 0;
+  rc = 0;
+out:
+  free(buf);
+  return rc;
 }

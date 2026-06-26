@@ -27,7 +27,8 @@ make san
 ## Usage
 
 ```sh
-./udump [-d] [-e] [-i <ifname> -w <output_file>] [-c <count>] [-G <seconds>] \
+./udump [-d] [-e] [-s <snaplen>] [-i <ifname> -w <output_file>] [-c <count>] \
+  [-G <seconds>] \
   [--filter-mode <bpf|user>] [filter...]
 ```
 
@@ -51,6 +52,8 @@ Options:
 - `-d`: compile-only mode, print filter tokens, parsed AST, normalized AST, and final classic BPF disassembly, then exit.
 - `-e`: accepted for tcpdump CLI compatibility. `udump` still writes pcap data
   to `-w` and does not print packet lines.
+- `-s <snaplen>`: set the capture snapshot length and pcap header snaplen.
+  Default is `262144`.
 - `-i <ifname>`: Linux interface name.
 - `-w <output_file>`: write captured packets to classic `pcap`; use `-w -` for stdout.
 - `-c <count>`: stop after writing this many matched packets.

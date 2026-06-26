@@ -16,6 +16,7 @@ struct opts {
   const char *ifname;
   const char *out_path;
   enum filter_mode filter_mode;
+  unsigned int snaplen;
   unsigned long long pkt_limit;
   unsigned int time_limit;
   int filter_argc;
@@ -25,8 +26,8 @@ struct opts {
 static void usage(FILE *out, const char *prog)
 {
   fprintf(out,
-      "usage: %s [-d] [-e] [-i <ifname> -w <output_file>] [-c <count>] "
-      "[-G <seconds>] "
+      "usage: %s [-d] [-e] [-s <snaplen>] [-i <ifname> -w <output_file>] "
+      "[-c <count>] [-G <seconds>] "
       "[--filter-mode <bpf|user>] "
       "[filter ...]\n",
       prog);
@@ -93,7 +94,7 @@ static int parse_opts(struct opts *opts, int argc, char **argv)
   opts->filter_mode = FILTER_MODE_BPF;
   have_filter_mode = 0;
 
-  while ((c = getopt_long(argc, argv, "c:G:dei:w:", long_opts, NULL)) != -1) {
+  while ((c = getopt_long(argc, argv, "c:G:dei:s:w:", long_opts, NULL)) != -1) {
     switch (c) {
     case 'c':
       if (opts->pkt_limit) {
@@ -131,6 +132,14 @@ static int parse_opts(struct opts *opts, int argc, char **argv)
         return -1;
       }
       opts->ifname = optarg;
+      break;
+    case 's':
+      if (opts->snaplen) {
+        fprintf(stderr, "duplicate -s option\n");
+        return -1;
+      }
+      if (parse_uint("-s", optarg, &opts->snaplen) < 0)
+        return -1;
       break;
     case 'w':
       if (opts->out_path) {
@@ -323,6 +332,7 @@ int main(int argc, char **argv)
   cfg.out_path = opts.out_path;
   cfg.filter = &flt;
   cfg.filter_mode = opts.filter_mode;
+  cfg.snaplen = opts.snaplen ? opts.snaplen : PCAP_SNAPLEN;
   cfg.pkt_limit = opts.pkt_limit;
   cfg.time_limit = opts.time_limit;
 

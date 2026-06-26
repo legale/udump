@@ -14,6 +14,7 @@ struct capture_cfg {
   const char *out_path;
   const struct filter *filter;
   enum filter_mode filter_mode;
+  unsigned int snaplen;
   unsigned long long pkt_limit;
   unsigned int time_limit;
 };

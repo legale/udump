@@ -1023,7 +1023,7 @@ static void test_capture_banner(void)
   }
   close(fds[1]);
 
-  capture_banner("udump", "lo", PCAP_LINKTYPE_EN10MB, PCAP_SNAPLEN);
+  capture_banner("udump", "lo", PCAP_LINKTYPE_EN10MB, 4096);
 
   if (dup2(saved_stderr, STDERR_FILENO) < 0)
     fail("test_capture_banner", "restore stderr failed");
@@ -1036,7 +1036,7 @@ static void test_capture_banner(void)
     buf[n] = '\0';
     if (!strstr(buf,
         "udump: listening on lo, link-type EN10MB (Ethernet), "
-        "snapshot length 262144 bytes\n"))
+        "snapshot length 4096 bytes\n"))
       fail("test_capture_banner", "bad banner");
   }
 
