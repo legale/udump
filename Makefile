@@ -30,7 +30,7 @@ $(TEST_BIN): $(TEST_OBJS)
 > $(CC) $(LDFLAGS) -o $@ $(TEST_OBJS)
 
 clean:
-> rm -f $(BIN) *.o tests/*.o $(TEST_BIN) cmd/udump/*.o cmd/udump/udump
+> rm -f $(BIN) *.o tests/*.o $(TEST_BIN)
 
 san: clean
 > $(MAKE) CC="$(SAN_CC)" CFLAGS="$(SAN_CFLAGS)" LDFLAGS="" all
