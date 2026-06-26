@@ -54,7 +54,7 @@ Options:
 - `-e`: accepted for tcpdump CLI compatibility. `udump` still writes pcap data
   to `-w` and does not print packet lines.
 - `-s <snaplen>`: set the capture snapshot length and pcap header snaplen.
-  Default is `262144`.
+  `0` means the default maximum, `262144`.
 - `-i <ifname>`: Linux interface name. `-i any` captures from all interfaces
   and writes `LINUX_SLL2 (Linux cooked v2)` records, like `tcpdump`.
 - `-w <output_file>`: write captured packets to classic `pcap`; use `-w -` for stdout.

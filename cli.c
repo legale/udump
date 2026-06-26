@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "cli.h"
+#include "pcap.h"
 
 static char *argv0;
 
@@ -62,6 +63,27 @@ static int parse_uint(const char *name, const char *arg, unsigned int *out)
   }
 
   *out = (unsigned int)val;
+  return 0;
+}
+
+static int parse_snaplen(const char *arg, unsigned int *out)
+{
+  char *end;
+  unsigned long val;
+  unsigned int snaplen;
+
+  errno = 0;
+  val = strtoul(arg, &end, 10);
+  if (errno || *arg == '\0' || *end != '\0' || val > UINT_MAX) {
+    fprintf(stderr, "invalid -s: %s\n", arg);
+    return -1;
+  }
+
+  if (val == 0)
+    val = PCAP_SNAPLEN;
+
+  snaplen = (unsigned int)val;
+  *out = snaplen;
   return 0;
 }
 
@@ -131,7 +153,7 @@ int parse_opts(struct opts *opts, int argc, char **argv)
       if (!NEXT_ARG_OK())
         incomplete_command();
       NEXT_ARG();
-      if (parse_uint("-s", *argv, &opts->snaplen) < 0)
+      if (parse_snaplen(*argv, &opts->snaplen) < 0)
         return -1;
     } else if (matches(*argv, "-i")) {
       if (opts->ifname) {

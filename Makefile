@@ -9,7 +9,7 @@ SAN_CFLAGS ?= -O1 -g -Wall -Wextra
 BIN = udump
 OBJS = main.o cli.o capture.o pcap.o packet.o filter.o bpf.o
 TEST_BIN = tests/test_udump
-TEST_OBJS = tests/test_udump.o capture.o filter.o packet.o pcap.o bpf.o
+TEST_OBJS = tests/test_udump.o cli.o capture.o filter.o packet.o pcap.o bpf.o
 
 .PHONY: all static clean test san
 

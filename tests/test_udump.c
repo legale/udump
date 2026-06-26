@@ -14,6 +14,7 @@
 #include "../filter.h"
 #include "../packet.h"
 #include "../pcap.h"
+#include "../cli.h"
 
 #define FIXTURE_PATH "tests/fixtures/br-eth0-30-tcp-port-22-host-172.16.133.8.pcap"
 
@@ -1006,6 +1007,22 @@ static void test_pcap_stdout(void)
   close(fds[0]);
 }
 
+static void test_parse_opts_snaplen_zero(void)
+{
+  struct opts opts;
+  char *argv[] = { "udump", "-d", "-s", "0" };
+
+  if (parse_opts(&opts, 4, argv) < 0) {
+    fail("test_parse_opts_snaplen_zero", "parse_opts failed");
+    return;
+  }
+
+  if (!opts.debug)
+    fail("test_parse_opts_snaplen_zero", "debug flag missing");
+  if (opts.snaplen != PCAP_SNAPLEN)
+    fail("test_parse_opts_snaplen_zero", "zero snaplen not expanded");
+}
+
 static void test_capture_banner(void)
 {
   char buf[256];
@@ -1368,6 +1385,7 @@ int main(void)
   test_packet_parse();
   test_pcap_writer();
   test_pcap_stdout();
+  test_parse_opts_snaplen_zero();
   test_capture_banner();
   test_capture_linktype();
   test_bpf_compile_any();
