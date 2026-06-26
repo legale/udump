@@ -8,6 +8,7 @@
 #define PCAP_LINKTYPE_IEEE802_11 105u
 #define PCAP_LINKTYPE_PRISM_HEADER 119u
 #define PCAP_LINKTYPE_IEEE802_11_RADIO 127u
+#define PCAP_LINKTYPE_LINUX_SLL2 276u
 
 struct pcap_writer {
   int fd;

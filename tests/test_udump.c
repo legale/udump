@@ -209,6 +209,18 @@ static int compile_filter(struct filter *f, struct bpf_prog *prog, int argc,
   return 0;
 }
 
+static int compile_filter_link(struct filter *f, struct bpf_prog *prog,
+    enum bpf_link_kind link, int argc, char **argv)
+{
+  if (filter_parse(f, argc, argv) < 0)
+    return -1;
+  if (bpf_compile_link(prog, f, link) < 0) {
+    filter_free(f);
+    return -1;
+  }
+  return 0;
+}
+
 static int same_bpf(int lhs_argc, char **lhs_argv, int rhs_argc,
     char **rhs_argv)
 {
@@ -1041,6 +1053,48 @@ static void test_capture_banner(void)
   }
 
   close(fds[0]);
+
+  if (pipe(fds) < 0) {
+    fail("test_capture_banner", "pipe any failed");
+    return;
+  }
+
+  saved_stderr = dup(STDERR_FILENO);
+  if (saved_stderr < 0) {
+    fail("test_capture_banner", "dup stderr any failed");
+    close(fds[0]);
+    close(fds[1]);
+    return;
+  }
+
+  if (dup2(fds[1], STDERR_FILENO) < 0) {
+    fail("test_capture_banner", "redirect stderr any failed");
+    close(saved_stderr);
+    close(fds[0]);
+    close(fds[1]);
+    return;
+  }
+  close(fds[1]);
+
+  capture_banner("udump", "any", PCAP_LINKTYPE_LINUX_SLL2, 262144);
+
+  if (dup2(saved_stderr, STDERR_FILENO) < 0)
+    fail("test_capture_banner", "restore stderr any failed");
+  close(saved_stderr);
+
+  n = read(fds[0], buf, sizeof(buf) - 1);
+  if (n < 0) {
+    fail("test_capture_banner", "read any failed");
+  } else {
+    buf[n] = '\0';
+    if (!strstr(buf, "udump: data link type LINUX_SLL2\n") ||
+        !strstr(buf,
+        "udump: listening on any, link-type LINUX_SLL2 (Linux cooked v2), "
+        "snapshot length 262144 bytes\n"))
+      fail("test_capture_banner", "bad any banner");
+  }
+
+  close(fds[0]);
 }
 
 static void test_capture_linktype(void)
@@ -1064,6 +1118,35 @@ static void test_capture_linktype(void)
     fail("test_capture_linktype", "bad radiotap linktype");
   if (capture_linktype(ARPHRD_NONE, &linktype) == 0)
     fail("test_capture_linktype", "unsupported type accepted");
+}
+
+static void test_bpf_compile_any(void)
+{
+  struct bpf_prog prog;
+  struct filter f;
+  char *host_argv[] = {"host", "172.16.140.4"};
+  char *port_argv[] = {"tcp", "port", "1812"};
+  char *ether_argv[] = {"ether", "host", "aa:bb:cc:dd:ee:ff"};
+
+  if (compile_filter_link(&f, &prog, BPF_LINK_IP, 2, host_argv) < 0)
+    fail("test_bpf_compile_any", "host compile failed");
+  else {
+    bpf_prog_free(&prog);
+    filter_free(&f);
+  }
+
+  if (compile_filter_link(&f, &prog, BPF_LINK_IP, 3, port_argv) < 0)
+    fail("test_bpf_compile_any", "port compile failed");
+  else {
+    bpf_prog_free(&prog);
+    filter_free(&f);
+  }
+
+  if (compile_filter_link(&f, &prog, BPF_LINK_IP, 3, ether_argv) == 0) {
+    bpf_prog_free(&prog);
+    filter_free(&f);
+    fail("test_bpf_compile_any", "ether any compile accepted");
+  }
 }
 
 static void test_fixture_tcp_port_22(void)
@@ -1287,6 +1370,7 @@ int main(void)
   test_pcap_stdout();
   test_capture_banner();
   test_capture_linktype();
+  test_bpf_compile_any();
   test_fixture_tcp_port_22();
   test_bpf_fixture_parity();
   test_bpf_fixture_or_parity();

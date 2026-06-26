@@ -158,6 +158,17 @@ static int bpf_emit_jump(struct bpf_prog *prog, unsigned short code,
   return bpf_emit(prog, insn);
 }
 
+static int bpf_emit_alu(struct bpf_prog *prog, unsigned short op,
+    unsigned int k)
+{
+  struct sock_filter insn;
+
+  memset(&insn, 0, sizeof(insn));
+  insn.code = BPF_ALU | op | BPF_K;
+  insn.k = k;
+  return bpf_emit(prog, insn);
+}
+
 static int patch_list_apply(struct bpf_prog *prog,
     struct bpf_patch_list *list, unsigned short target)
 {
@@ -251,6 +262,36 @@ static int block_test_abs(struct bpf_prog *prog, unsigned short width,
     if (patch_list_add(&blk->falses, idx, PATCH_JT) < 0)
       goto err;
   }
+
+  return 0;
+
+err:
+  block_free(blk);
+  return -1;
+}
+
+static int block_test_abs_mask_eq(struct bpf_prog *prog, unsigned short width,
+    unsigned int off, unsigned int mask, unsigned int k,
+    struct bpf_block *blk)
+{
+  unsigned short idx;
+
+  memset(blk, 0, sizeof(*blk));
+  blk->start = prog->len;
+
+  if (bpf_emit_stmt(prog, BPF_LD | width | BPF_ABS, off) < 0)
+    return -1;
+  if (bpf_emit_alu(prog, BPF_AND, mask) < 0)
+    return -1;
+
+  idx = prog->len;
+  if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, k, 0, 0) < 0)
+    return -1;
+
+  if (patch_list_add(&blk->trues, idx, PATCH_JT) < 0)
+    goto err;
+  if (patch_list_add(&blk->falses, idx, PATCH_JF) < 0)
+    goto err;
 
   return 0;
 
@@ -382,6 +423,26 @@ static int compile_ipv4_host_addr(struct bpf_prog *prog,
   return 0;
 }
 
+static int compile_ip_ipv4_host_addr(struct bpf_prog *prog,
+    const struct filter_term *term, unsigned int off, struct bpf_block *out)
+{
+  struct bpf_block ip;
+  struct bpf_block cmp;
+
+  if (block_test_abs_mask_eq(prog, BPF_B, 0, 0xf0, 0x40, &ip) < 0)
+    return -1;
+  if (compile_ip_eq(prog, off, term->ip, term->ip_len, &cmp) < 0) {
+    block_free(&ip);
+    return -1;
+  }
+  if (block_and(prog, &ip, &cmp, out) < 0) {
+    block_free(&ip);
+    block_free(&cmp);
+    return -1;
+  }
+  return 0;
+}
+
 static int compile_ipv6_host_addr(struct bpf_prog *prog,
     const struct filter_term *term, unsigned int off, struct bpf_block *out)
 {
@@ -396,6 +457,26 @@ static int compile_ipv6_host_addr(struct bpf_prog *prog,
   }
   if (block_and(prog, &eth, &cmp, out) < 0) {
     block_free(&eth);
+    block_free(&cmp);
+    return -1;
+  }
+  return 0;
+}
+
+static int compile_ip_ipv6_host_addr(struct bpf_prog *prog,
+    const struct filter_term *term, unsigned int off, struct bpf_block *out)
+{
+  struct bpf_block ip;
+  struct bpf_block cmp;
+
+  if (block_test_abs_mask_eq(prog, BPF_B, 0, 0xf0, 0x60, &ip) < 0)
+    return -1;
+  if (compile_ip_eq(prog, off, term->ip, term->ip_len, &cmp) < 0) {
+    block_free(&ip);
+    return -1;
+  }
+  if (block_and(prog, &ip, &cmp, out) < 0) {
+    block_free(&ip);
     block_free(&cmp);
     return -1;
   }
@@ -422,6 +503,26 @@ static int compile_ipv4_proto(struct bpf_prog *prog, unsigned int proto,
   return 0;
 }
 
+static int compile_ip_ipv4_proto(struct bpf_prog *prog, unsigned int proto,
+    struct bpf_block *out)
+{
+  struct bpf_block ip;
+  struct bpf_block l4;
+
+  if (block_test_abs_mask_eq(prog, BPF_B, 0, 0xf0, 0x40, &ip) < 0)
+    return -1;
+  if (block_test_abs(prog, BPF_B, 9, BPF_JEQ, proto, 1, &l4) < 0) {
+    block_free(&ip);
+    return -1;
+  }
+  if (block_and(prog, &ip, &l4, out) < 0) {
+    block_free(&ip);
+    block_free(&l4);
+    return -1;
+  }
+  return 0;
+}
+
 static int compile_ipv6_proto(struct bpf_prog *prog, unsigned int proto,
     struct bpf_block *out)
 {
@@ -442,6 +543,26 @@ static int compile_ipv6_proto(struct bpf_prog *prog, unsigned int proto,
   return 0;
 }
 
+static int compile_ip_ipv6_proto(struct bpf_prog *prog, unsigned int proto,
+    struct bpf_block *out)
+{
+  struct bpf_block ip;
+  struct bpf_block l4;
+
+  if (block_test_abs_mask_eq(prog, BPF_B, 0, 0xf0, 0x60, &ip) < 0)
+    return -1;
+  if (block_test_abs(prog, BPF_B, 6, BPF_JEQ, proto, 1, &l4) < 0) {
+    block_free(&ip);
+    return -1;
+  }
+  if (block_and(prog, &ip, &l4, out) < 0) {
+    block_free(&ip);
+    block_free(&l4);
+    return -1;
+  }
+  return 0;
+}
+
 static int compile_ipv4_l4_proto(struct bpf_prog *prog, int proto,
     struct bpf_block *blk)
 {
@@ -455,6 +576,41 @@ static int compile_ipv4_l4_proto(struct bpf_prog *prog, int proto,
   blk->start = prog->len;
 
   if (bpf_emit_stmt(prog, BPF_LD | BPF_B | BPF_ABS, 23) < 0)
+    return -1;
+
+  idx1 = prog->len;
+  if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, 6, 0, 0) < 0)
+    return -1;
+  idx2 = prog->len;
+  if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, 17, 0, 0) < 0)
+    return -1;
+
+  if (patch_list_add(&blk->trues, idx1, PATCH_JT) < 0)
+    goto err;
+  if (patch_list_add(&blk->trues, idx2, PATCH_JT) < 0)
+    goto err;
+  if (patch_list_add(&blk->falses, idx2, PATCH_JF) < 0)
+    goto err;
+  return 0;
+
+err:
+  block_free(blk);
+  return -1;
+}
+
+static int compile_ip_ipv4_l4_proto(struct bpf_prog *prog, int proto,
+    struct bpf_block *blk)
+{
+  unsigned short idx1;
+  unsigned short idx2;
+
+  if (proto == 6 || proto == 17)
+    return block_test_abs(prog, BPF_B, 9, BPF_JEQ, (unsigned int)proto, 1, blk);
+
+  memset(blk, 0, sizeof(*blk));
+  blk->start = prog->len;
+
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_B | BPF_ABS, 9) < 0)
     return -1;
 
   idx1 = prog->len;
@@ -512,9 +668,50 @@ err:
   return -1;
 }
 
+static int compile_ip_ipv6_l4_proto(struct bpf_prog *prog, int proto,
+    struct bpf_block *blk)
+{
+  unsigned short idx1;
+  unsigned short idx2;
+
+  if (proto == 6 || proto == 17)
+    return block_test_abs(prog, BPF_B, 6, BPF_JEQ, (unsigned int)proto, 1, blk);
+
+  memset(blk, 0, sizeof(*blk));
+  blk->start = prog->len;
+
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_B | BPF_ABS, 6) < 0)
+    return -1;
+
+  idx1 = prog->len;
+  if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, 6, 0, 0) < 0)
+    return -1;
+  idx2 = prog->len;
+  if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, 17, 0, 0) < 0)
+    return -1;
+
+  if (patch_list_add(&blk->trues, idx1, PATCH_JT) < 0)
+    goto err;
+  if (patch_list_add(&blk->trues, idx2, PATCH_JT) < 0)
+    goto err;
+  if (patch_list_add(&blk->falses, idx2, PATCH_JF) < 0)
+    goto err;
+  return 0;
+
+err:
+  block_free(blk);
+  return -1;
+}
+
 static int compile_ipv4_not_frag(struct bpf_prog *prog, struct bpf_block *blk)
 {
   return block_test_abs(prog, BPF_H, 20, BPF_JSET, 0x1fff, 0, blk);
+}
+
+static int compile_ip_ipv4_not_frag(struct bpf_prog *prog,
+    struct bpf_block *blk)
+{
+  return block_test_abs(prog, BPF_H, 6, BPF_JSET, 0x1fff, 0, blk);
 }
 
 static int compile_ipv4_port_cmp(struct bpf_prog *prog, unsigned short port,
@@ -545,6 +742,67 @@ static int compile_ipv4_port_cmp(struct bpf_prog *prog, unsigned short port,
   }
 
   if (bpf_emit_stmt(prog, BPF_LD | BPF_H | BPF_IND, 16) < 0)
+    return -1;
+
+  idx3 = prog->len;
+  if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, port, 0, 0) < 0)
+    return -1;
+
+  if (patch_list_add(&blk->trues, idx1, PATCH_JT) < 0)
+    goto err;
+  if (has_port_hi && patch_list_add(&blk->trues, idx2, PATCH_JT) < 0)
+    goto err;
+  if (patch_list_add(&blk->trues, idx3, PATCH_JT) < 0)
+    goto err;
+
+  if (has_port_hi) {
+    idx4 = prog->len;
+    if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, port_hi, 0, 0) < 0)
+      return -1;
+    if (patch_list_add(&blk->trues, idx4, PATCH_JT) < 0)
+      goto err;
+    if (patch_list_add(&blk->falses, idx4, PATCH_JF) < 0)
+      goto err;
+  } else {
+    if (patch_list_add(&blk->falses, idx3, PATCH_JF) < 0)
+      goto err;
+  }
+
+  return 0;
+
+err:
+  block_free(blk);
+  return -1;
+}
+
+static int compile_ip_ipv4_port_cmp(struct bpf_prog *prog, unsigned short port,
+    unsigned short port_hi, int has_port_hi, struct bpf_block *blk)
+{
+  unsigned short idx1;
+  unsigned short idx2;
+  unsigned short idx3;
+  unsigned short idx4;
+
+  memset(blk, 0, sizeof(*blk));
+  blk->start = prog->len;
+
+  if (bpf_emit_stmt(prog, BPF_LDX | BPF_MSH | BPF_B, 0) < 0)
+    return -1;
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_H | BPF_IND, 0) < 0)
+    return -1;
+
+  idx1 = prog->len;
+  if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, port, 0, 0) < 0)
+    return -1;
+
+  idx2 = 0;
+  if (has_port_hi) {
+    idx2 = prog->len;
+    if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, port_hi, 0, 0) < 0)
+      return -1;
+  }
+
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_H | BPF_IND, 2) < 0)
     return -1;
 
   idx3 = prog->len;
@@ -637,6 +895,65 @@ err:
   return -1;
 }
 
+static int compile_ip_ipv6_port_cmp(struct bpf_prog *prog, unsigned short port,
+    unsigned short port_hi, int has_port_hi, struct bpf_block *blk)
+{
+  unsigned short idx1;
+  unsigned short idx2;
+  unsigned short idx3;
+  unsigned short idx4;
+
+  memset(blk, 0, sizeof(*blk));
+  blk->start = prog->len;
+
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_H | BPF_ABS, 40) < 0)
+    return -1;
+
+  idx1 = prog->len;
+  if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, port, 0, 0) < 0)
+    return -1;
+
+  idx2 = 0;
+  if (has_port_hi) {
+    idx2 = prog->len;
+    if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, port_hi, 0, 0) < 0)
+      return -1;
+  }
+
+  if (bpf_emit_stmt(prog, BPF_LD | BPF_H | BPF_ABS, 42) < 0)
+    return -1;
+
+  idx3 = prog->len;
+  if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, port, 0, 0) < 0)
+    return -1;
+
+  if (patch_list_add(&blk->trues, idx1, PATCH_JT) < 0)
+    goto err;
+  if (has_port_hi && patch_list_add(&blk->trues, idx2, PATCH_JT) < 0)
+    goto err;
+  if (patch_list_add(&blk->trues, idx3, PATCH_JT) < 0)
+    goto err;
+
+  if (has_port_hi) {
+    idx4 = prog->len;
+    if (bpf_emit_jump(prog, BPF_JMP | BPF_JEQ | BPF_K, port_hi, 0, 0) < 0)
+      return -1;
+    if (patch_list_add(&blk->trues, idx4, PATCH_JT) < 0)
+      goto err;
+    if (patch_list_add(&blk->falses, idx4, PATCH_JF) < 0)
+      goto err;
+  } else {
+    if (patch_list_add(&blk->falses, idx3, PATCH_JF) < 0)
+      goto err;
+  }
+
+  return 0;
+
+err:
+  block_free(blk);
+  return -1;
+}
+
 static int compile_ipv4_port(struct bpf_prog *prog, int proto,
     const struct filter_term *term, struct bpf_block *out)
 {
@@ -685,6 +1002,54 @@ err:
   return -1;
 }
 
+static int compile_ip_ipv4_port(struct bpf_prog *prog, int proto,
+    const struct filter_term *term, struct bpf_block *out)
+{
+  struct bpf_block ip;
+  struct bpf_block l4;
+  struct bpf_block frag;
+  struct bpf_block cmp;
+  struct bpf_block tmp1;
+  struct bpf_block tmp2;
+
+  if (block_test_abs_mask_eq(prog, BPF_B, 0, 0xf0, 0x40, &ip) < 0)
+    return -1;
+  if (compile_ip_ipv4_l4_proto(prog, proto, &l4) < 0) {
+    block_free(&ip);
+    return -1;
+  }
+  if (compile_ip_ipv4_not_frag(prog, &frag) < 0) {
+    block_free(&ip);
+    block_free(&l4);
+    return -1;
+  }
+  if (compile_ip_ipv4_port_cmp(prog, term->port, term->port_hi,
+      term->has_port_hi, &cmp) < 0) {
+    block_free(&ip);
+    block_free(&l4);
+    block_free(&frag);
+    return -1;
+  }
+  if (block_and(prog, &ip, &l4, &tmp1) < 0)
+    goto err;
+  if (block_and(prog, &tmp1, &frag, &tmp2) < 0)
+    goto err_tmp1;
+  if (block_and(prog, &tmp2, &cmp, out) < 0)
+    goto err_tmp2;
+  return 0;
+
+err_tmp2:
+  block_free(&tmp2);
+err_tmp1:
+  block_free(&tmp1);
+err:
+  block_free(&ip);
+  block_free(&l4);
+  block_free(&frag);
+  block_free(&cmp);
+  return -1;
+}
+
 static int compile_ipv6_port(struct bpf_prog *prog, int proto,
     const struct filter_term *term, struct bpf_block *out)
 {
@@ -715,6 +1080,41 @@ static int compile_ipv6_port(struct bpf_prog *prog, int proto,
 
 err:
   block_free(&eth);
+  block_free(&l4);
+  block_free(&cmp);
+  return -1;
+}
+
+static int compile_ip_ipv6_port(struct bpf_prog *prog, int proto,
+    const struct filter_term *term, struct bpf_block *out)
+{
+  struct bpf_block ip;
+  struct bpf_block l4;
+  struct bpf_block cmp;
+  struct bpf_block tmp;
+
+  if (block_test_abs_mask_eq(prog, BPF_B, 0, 0xf0, 0x60, &ip) < 0)
+    return -1;
+  if (compile_ip_ipv6_l4_proto(prog, proto, &l4) < 0) {
+    block_free(&ip);
+    return -1;
+  }
+  if (compile_ip_ipv6_port_cmp(prog, term->port, term->port_hi,
+      term->has_port_hi, &cmp) < 0) {
+    block_free(&ip);
+    block_free(&l4);
+    return -1;
+  }
+  if (block_and(prog, &ip, &l4, &tmp) < 0)
+    goto err;
+  if (block_and(prog, &tmp, &cmp, out) < 0) {
+    block_free(&tmp);
+    goto err;
+  }
+  return 0;
+
+err:
+  block_free(&ip);
   block_free(&l4);
   block_free(&cmp);
   return -1;
@@ -830,8 +1230,106 @@ static int compile_term_block(struct bpf_prog *prog,
   return -1;
 }
 
+static int compile_ip_term_block(struct bpf_prog *prog,
+    const struct filter_term *term, struct bpf_block *out)
+{
+  struct bpf_block lhs;
+  struct bpf_block rhs;
+  int proto;
+
+  switch (term->kind) {
+  case TERM_TCP:
+    if (compile_ip_ipv4_proto(prog, 6, &lhs) < 0)
+      return -1;
+    if (compile_ip_ipv6_proto(prog, 6, &rhs) < 0) {
+      block_free(&lhs);
+      return -1;
+    }
+    if (block_or(prog, &lhs, &rhs, out) < 0) {
+      block_free(&lhs);
+      block_free(&rhs);
+      return -1;
+    }
+    return 0;
+  case TERM_UDP:
+    if (compile_ip_ipv4_proto(prog, 17, &lhs) < 0)
+      return -1;
+    if (compile_ip_ipv6_proto(prog, 17, &rhs) < 0) {
+      block_free(&lhs);
+      return -1;
+    }
+    if (block_or(prog, &lhs, &rhs, out) < 0) {
+      block_free(&lhs);
+      block_free(&rhs);
+      return -1;
+    }
+    return 0;
+  case TERM_PORT:
+    proto = term->l4_proto;
+    if (compile_ip_ipv6_port(prog, proto, term, &lhs) < 0)
+      return -1;
+    if (compile_ip_ipv4_port(prog, proto, term, &rhs) < 0) {
+      block_free(&lhs);
+      return -1;
+    }
+    if (block_or(prog, &lhs, &rhs, out) < 0) {
+      block_free(&lhs);
+      block_free(&rhs);
+      return -1;
+    }
+    return 0;
+  case TERM_HOST:
+    if (term->ip_len == 4) {
+      if (term->ip_dir == HOST_DIR_SRC)
+        return compile_ip_ipv4_host_addr(prog, term, 12, out);
+      if (term->ip_dir == HOST_DIR_DST)
+        return compile_ip_ipv4_host_addr(prog, term, 16, out);
+      if (compile_ip_ipv4_host_addr(prog, term, 12, &lhs) < 0)
+        return -1;
+      if (compile_ip_ipv4_host_addr(prog, term, 16, &rhs) < 0) {
+        block_free(&lhs);
+        return -1;
+      }
+      if (block_or(prog, &lhs, &rhs, out) < 0) {
+        block_free(&lhs);
+        block_free(&rhs);
+        return -1;
+      }
+      return 0;
+    }
+    if (term->ip_len == 16) {
+      if (term->ip_dir == HOST_DIR_SRC)
+        return compile_ip_ipv6_host_addr(prog, term, 8, out);
+      if (term->ip_dir == HOST_DIR_DST)
+        return compile_ip_ipv6_host_addr(prog, term, 24, out);
+      if (compile_ip_ipv6_host_addr(prog, term, 8, &lhs) < 0)
+        return -1;
+      if (compile_ip_ipv6_host_addr(prog, term, 24, &rhs) < 0) {
+        block_free(&lhs);
+        return -1;
+      }
+      if (block_or(prog, &lhs, &rhs, out) < 0) {
+        block_free(&lhs);
+        block_free(&rhs);
+        return -1;
+      }
+      return 0;
+    }
+    fprintf(stderr, "bpf compiler: bad host length: %u\n", term->ip_len);
+    return -1;
+  case TERM_ETHER_SRC:
+  case TERM_ETHER_DST:
+  case TERM_ETHER_HOST:
+    fprintf(stderr, "bpf compiler: ether terms unsupported on any\n");
+    return -1;
+  }
+
+  fprintf(stderr, "bpf compiler: unsupported term kind: %d\n", term->kind);
+  return -1;
+}
+
 static int compile_node_block(struct bpf_prog *prog, const struct filter_node *node,
-    struct bpf_block *out)
+    enum bpf_link_kind link, struct bpf_block *out)
 {
   struct bpf_block lhs;
   struct bpf_block rhs;
@@ -839,11 +1337,13 @@ static int compile_node_block(struct bpf_prog *prog, const struct filter_node *n
 
   switch (node->kind) {
   case NODE_TERM:
+    if (link == BPF_LINK_IP)
+      return compile_ip_term_block(prog, &node->term, out);
     return compile_term_block(prog, &node->term, out);
   case NODE_AND:
-    if (compile_node_block(prog, node->expr.lhs, &lhs) < 0)
+    if (compile_node_block(prog, node->expr.lhs, link, &lhs) < 0)
       return -1;
-    if (compile_node_block(prog, node->expr.rhs, &rhs) < 0) {
+    if (compile_node_block(prog, node->expr.rhs, link, &rhs) < 0) {
       block_free(&lhs);
       return -1;
     }
@@ -854,9 +1354,9 @@ static int compile_node_block(struct bpf_prog *prog, const struct filter_node *n
     }
     return 0;
   case NODE_OR:
-    if (compile_node_block(prog, node->expr.lhs, &lhs) < 0)
+    if (compile_node_block(prog, node->expr.lhs, link, &lhs) < 0)
       return -1;
-    if (compile_node_block(prog, node->expr.rhs, &rhs) < 0) {
+    if (compile_node_block(prog, node->expr.rhs, link, &rhs) < 0) {
       block_free(&lhs);
       return -1;
     }
@@ -867,7 +1367,7 @@ static int compile_node_block(struct bpf_prog *prog, const struct filter_node *n
     }
     return 0;
   case NODE_NOT:
-    if (compile_node_block(prog, node->child, &lhs) < 0)
+    if (compile_node_block(prog, node->child, link, &lhs) < 0)
       return -1;
     *out = lhs;
     tmp = out->trues;
@@ -881,7 +1381,8 @@ static int compile_node_block(struct bpf_prog *prog, const struct filter_node *n
   return -1;
 }
 
-int bpf_compile(struct bpf_prog *prog, const struct filter *f)
+int bpf_compile_link(struct bpf_prog *prog, const struct filter *f,
+    enum bpf_link_kind link)
 {
   struct filter norm;
   struct bpf_block root;
@@ -895,7 +1396,7 @@ int bpf_compile(struct bpf_prog *prog, const struct filter *f)
 
   if (filter_normalize(&norm, f) < 0)
     goto err;
-  if (compile_node_block(prog, norm.root, &root) < 0) {
+  if (compile_node_block(prog, norm.root, link, &root) < 0) {
     filter_free(&norm);
     goto err;
   }
@@ -920,6 +1421,11 @@ err_root:
 err:
   bpf_prog_reset(prog);
   return -1;
+}
+
+int bpf_compile(struct bpf_prog *prog, const struct filter *f)
+{
+  return bpf_compile_link(prog, f, BPF_LINK_ETHERNET);
 }
 
 void bpf_dump(FILE *out, const struct bpf_prog *prog)

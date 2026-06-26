@@ -41,6 +41,7 @@ Examples:
 ./udump -i br-eth0 -w host.pcap ether host aa:bb:cc:dd:ee:ff
 ./udump -i br-eth0 -w ip-host.pcap host 192.168.1.1
 ./udump -i br-eth0 -w debug-user.pcap --filter-mode user tcp port 22
+./udump -i any -w any.pcap tcp port 1812 and host 172.16.140.4
 ./udump -i br-eth0 -w radius.pcap \
   "(port 1812 or port 1813 or port 1700 or port 3799) and (host 172.16.140.4)"
 ./udump -d udp port 67 or udp port 68
@@ -54,7 +55,8 @@ Options:
   to `-w` and does not print packet lines.
 - `-s <snaplen>`: set the capture snapshot length and pcap header snaplen.
   Default is `262144`.
-- `-i <ifname>`: Linux interface name.
+- `-i <ifname>`: Linux interface name. `-i any` captures from all interfaces
+  and writes `LINUX_SLL2 (Linux cooked v2)` records, like `tcpdump`.
 - `-w <output_file>`: write captured packets to classic `pcap`; use `-w -` for stdout.
 - `-c <count>`: stop after writing this many matched packets.
 - `-G <seconds>`: stop after this many seconds.
@@ -75,6 +77,12 @@ Supported filters:
 - explicit `and`
 - explicit `or`
 - parentheses for grouping
+
+For `-i any`:
+
+- kernel filtering stays enabled by default
+- `tcp`, `udp`, `port`, `host`, `src host`, `dst host` work
+- `ether src`, `ether dst`, `ether host` are not supported
 
 Grammar notes:
 

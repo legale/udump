@@ -22,6 +22,8 @@
 #include "packet.h"
 #include "pcap.h"
 
+#define SLL2_HDR_LEN 20u
+
 int capture_linktype(unsigned short hw_type, unsigned int *linktype)
 {
   switch (hw_type) {
@@ -54,6 +56,8 @@ static const char *linktype_name(unsigned int linktype)
     return "PRISM_HEADER (802.11 plus Prism header)";
   case PCAP_LINKTYPE_IEEE802_11_RADIO:
     return "IEEE802_11_RADIO (802.11 plus radiotap header)";
+  case PCAP_LINKTYPE_LINUX_SLL2:
+    return "LINUX_SLL2 (Linux cooked v2)";
   default:
     return "UNKNOWN";
   }
@@ -62,6 +66,8 @@ static const char *linktype_name(unsigned int linktype)
 void capture_banner(const char *progname, const char *ifname,
     unsigned int linktype, unsigned int snaplen)
 {
+  if (!strcmp(ifname, "any") && linktype == PCAP_LINKTYPE_LINUX_SLL2)
+    fprintf(stderr, "%s: data link type LINUX_SLL2\n", progname);
   fprintf(stderr, "%s: listening on %s, link-type %s, snapshot length %u bytes\n",
       progname, ifname, linktype_name(linktype), snaplen);
 }
@@ -186,12 +192,12 @@ static int get_link_type(unsigned int ifindex, unsigned short *hw_type)
   }
 }
 
-static int open_socket(unsigned int ifindex)
+static int open_socket(unsigned int ifindex, int cooked)
 {
   struct sockaddr_ll sll;
   int fd;
 
-  fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+  fd = socket(AF_PACKET, cooked ? SOCK_DGRAM : SOCK_RAW, htons(ETH_P_ALL));
   if (fd < 0) {
     perror("socket");
     return -1;
@@ -209,6 +215,32 @@ static int open_socket(unsigned int ifindex)
   }
 
   return fd;
+}
+
+static void put_be16(unsigned char *dst, unsigned int val)
+{
+  dst[0] = (unsigned char)((val >> 8) & 0xff);
+  dst[1] = (unsigned char)(val & 0xff);
+}
+
+static void put_be32(unsigned char *dst, unsigned int val)
+{
+  dst[0] = (unsigned char)((val >> 24) & 0xff);
+  dst[1] = (unsigned char)((val >> 16) & 0xff);
+  dst[2] = (unsigned char)((val >> 8) & 0xff);
+  dst[3] = (unsigned char)(val & 0xff);
+}
+
+static void build_sll2(unsigned char *dst, const struct sockaddr_ll *from)
+{
+  // собираем cooked v2 заголовок для pcap как у tcpdump -i any
+  memset(dst, 0, SLL2_HDR_LEN);
+  put_be16(dst + 0, ntohs(from->sll_protocol));
+  put_be32(dst + 4, (unsigned int)from->sll_ifindex);
+  put_be16(dst + 8, from->sll_hatype);
+  dst[10] = from->sll_pkttype;
+  dst[11] = from->sll_halen > 8 ? 8 : from->sll_halen;
+  memcpy(dst + 12, from->sll_addr, dst[11]);
 }
 
 static int wait_packet(int fd, unsigned long long deadline_ms)
@@ -249,7 +281,7 @@ static int wait_packet(int fd, unsigned long long deadline_ms)
   return ret;
 }
 
-static int attach_bpf(int fd, const struct filter *f)
+static int attach_bpf(int fd, const struct filter *f, enum bpf_link_kind link)
 {
   struct sock_fprog fprog;
   struct bpf_prog prog;
@@ -257,7 +289,7 @@ static int attach_bpf(int fd, const struct filter *f)
   if (!f || !f->root)
     return 0;
 
-  if (bpf_compile(&prog, f) < 0)
+  if (bpf_compile_link(&prog, f, link) < 0)
     return -1;
 
   fprog = bpf_sock_fprog(&prog);
@@ -277,42 +309,67 @@ int capture_run(const struct capture_cfg *cfg)
   unsigned int linktype;
   unsigned int ifindex;
   unsigned int snaplen;
+  unsigned int buf_sz;
+  unsigned int hdr_len;
   unsigned short hw_type;
   struct pkt_info pi;
   struct pcap_writer pw;
+  struct sockaddr_ll from;
+  socklen_t fromlen;
   struct timespec ts;
   unsigned long long deadline_ms;
   unsigned long long seen;
+  size_t pkt_off;
+  size_t pkt_cap;
+  unsigned int caplen;
+  unsigned int origlen;
   ssize_t len;
+  int cooked;
+  int is_any;
   int ready;
   int fd;
   int rc;
 
   snaplen = cfg->snaplen ? cfg->snaplen : PCAP_SNAPLEN;
+  is_any = !strcmp(cfg->ifname, "any");
+  // any читает cooked пакеты без l2 заголовка, его дописываем сами в pcap
+  cooked = is_any;
+  hdr_len = is_any ? SLL2_HDR_LEN : 0;
+  buf_sz = snaplen + hdr_len;
 
-  buf = malloc(snaplen);
+  if (is_any && cfg->filter_mode == FILTER_MODE_USER) {
+    fprintf(stderr, "filter-mode user is not supported on interface any\n");
+    return -1;
+  }
+
+  buf = malloc(buf_sz);
   if (!buf) {
     perror("malloc");
     return -1;
   }
 
-  ifindex = if_nametoindex(cfg->ifname);
-  if (!ifindex) {
-    fprintf(stderr, "unknown interface: %s\n", cfg->ifname);
-    rc = -1;
-    goto out;
-  }
+  if (is_any) {
+    ifindex = 0;
+    linktype = PCAP_LINKTYPE_LINUX_SLL2;
+  } else {
+    ifindex = if_nametoindex(cfg->ifname);
+    if (!ifindex) {
+      fprintf(stderr, "unknown interface: %s\n", cfg->ifname);
+      rc = -1;
+      goto out;
+    }
 
-  if (get_link_type(ifindex, &hw_type) < 0) {
-    rc = -1;
-    goto out;
-  }
+    if (get_link_type(ifindex, &hw_type) < 0) {
+      rc = -1;
+      goto out;
+    }
 
-  if (capture_linktype(hw_type, &linktype) < 0) {
-    fprintf(stderr, "unsupported interface type %u on %s\n",
-        hw_type, cfg->ifname);
-    rc = -1;
-    goto out;
+    if (capture_linktype(hw_type, &linktype) < 0) {
+      fprintf(stderr, "unsupported interface type %u on %s\n",
+          hw_type, cfg->ifname);
+      rc = -1;
+      goto out;
+    }
   }
 
   if (pcap_open(&pw, cfg->out_path, snaplen, linktype) < 0) {
@@ -320,7 +377,7 @@ int capture_run(const struct capture_cfg *cfg)
     goto out;
   }
 
-  fd = open_socket(ifindex);
+  fd = open_socket(ifindex, cooked);
   if (fd < 0) {
     pcap_close(&pw);
     rc = -1;
@@ -328,7 +385,9 @@ int capture_run(const struct capture_cfg *cfg)
   }
 
   if (cfg->filter_mode == FILTER_MODE_BPF &&
-      attach_bpf(fd, cfg->filter) < 0) {
+      attach_bpf(fd, cfg->filter,
+      // для any фильтр компилируется от ip payload, а не от ethernet кадра
+      is_any ? BPF_LINK_IP : BPF_LINK_ETHERNET) < 0) {
     close(fd);
     pcap_close(&pw);
     rc = -1;
@@ -362,7 +421,9 @@ int capture_run(const struct capture_cfg *cfg)
     if (!ready)
       break;
 
-    len = recvfrom(fd, buf, snaplen, 0, NULL, NULL);
+    fromlen = sizeof(from);
+    len = recvfrom(fd, buf + hdr_len, snaplen, MSG_TRUNC,
+        (struct sockaddr *)&from, &fromlen);
     if (len < 0) {
       if (errno == EINTR)
         continue;
@@ -373,9 +434,19 @@ int capture_run(const struct capture_cfg *cfg)
       goto out;
     }
 
+    pkt_off = hdr_len;
+    pkt_cap = snaplen;
+    if ((size_t)len < pkt_cap)
+      pkt_cap = (size_t)len;
+    caplen = (unsigned int)(pkt_cap + pkt_off);
+    origlen = (unsigned int)len + hdr_len;
+
+    if (is_any)
+      build_sll2(buf, &from);
+
     if (cfg->filter_mode == FILTER_MODE_USER &&
         cfg->filter && cfg->filter->root) {
-      if (packet_parse(&pi, buf, (unsigned int)len) < 0)
+      if (packet_parse(&pi, buf + pkt_off, (unsigned int)pkt_cap) < 0)
         continue;
       if (!filter_match(cfg->filter, &pi))
         continue;
@@ -389,8 +460,7 @@ int capture_run(const struct capture_cfg *cfg)
       goto out;
     }
 
-    if (pcap_write_packet(&pw, &ts, buf, (unsigned int)len,
-        (unsigned int)len) < 0) {
+    if (pcap_write_packet(&pw, &ts, buf, caplen, origlen) < 0) {
       close(fd);
       pcap_close(&pw);
       rc = -1;
